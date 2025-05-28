@@ -1,0 +1,47 @@
+{
+  "name": "arbitrage-bot",
+  "version": "1.0.0",
+  "description": "Event-driven DEX arbitrage bot for SEED/WETH pairs",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "watch": "nodemon --exec ts-node src/index.ts",
+    "clean": "rm -rf dist",
+    "lint": "eslint src/**/*.ts",
+    "type-check": "tsc --noEmit",
+    "compile:contracts": "hardhat compile",
+    "deploy:test": "hardhat run src/test/deployTestTokens.ts",
+    "test": "hardhat test"
+  },
+  "keywords": [
+    "arbitrage",
+    "uniswap",
+    "ethereum",
+    "arbitrum",
+    "trading"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "@uniswap/sdk-core": "^7.7.2",
+    "@uniswap/v2-core": "^1.0.1",
+    "@uniswap/v2-periphery": "^1.1.0-beta.0",
+    "@uniswap/v3-sdk": "^3.25.2",
+    "dotenv": "^16.5.0",
+    "ethers": "^5.7.2",
+    "hardhat": "^2.24.1"
+  },
+  "devDependencies": {
+    "@types/chai": "^5.2.2",
+    "@types/node": "^18.15.0",
+    "@typescript-eslint/eslint-plugin": "^5.57.0",
+    "@typescript-eslint/parser": "^5.57.0",
+    "chai": "^5.2.0",
+    "eslint": "^8.37.0",
+    "nodemon": "^2.0.21",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.0.2"
+  }
+}
