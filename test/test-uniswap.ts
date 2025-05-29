@@ -1,7 +1,7 @@
 import { ethers } from "ethers";
 import { abi as IUniswapV3PoolABI } from "@uniswap/v3-core/artifacts/contracts/interfaces/IUniswapV3Pool.sol/IUniswapV3Pool.json";
-import config from "../../config.json";
-import { logger } from "../utils/logger";
+import config from "../config.json";
+import { logger } from "../src/utils/logger";
 
 // TypeScript interfaces
 interface TokenConfig {
