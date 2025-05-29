@@ -5,7 +5,7 @@ async function main() {
   try {
     // Connect to your Arbitrum fork
     const provider = new ethers.providers.JsonRpcProvider(
-      "http://localhost:8545"
+      "http://localhost:8546"
     );
 
     // Use the test account from your memory

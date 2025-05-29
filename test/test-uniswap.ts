@@ -176,7 +176,7 @@ async function testUniswap(): Promise<void> {
     logger.info("=".repeat(50));
 
     const arbProvider = new ethers.providers.JsonRpcProvider(
-      "http://127.0.0.1:8545"
+      "http://127.0.0.1:8546"
     );
 
     const blockNumber = await arbProvider.getBlockNumber();
@@ -195,7 +195,7 @@ async function testUniswap(): Promise<void> {
   } catch (error: any) {
     logger.error("❌ Error testing Arbitrum fork:", error.message);
     logger.info("\nTo fix this, make sure anvil is running with:");
-    logger.info("anvil --fork-url $ARB_RPC_URL --port 8545");
+    logger.info("anvil --fork-url $ARB_RPC_URL --port 8546");
   }
 }
 

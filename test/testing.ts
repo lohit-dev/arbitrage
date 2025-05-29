@@ -8,7 +8,7 @@ describe("Trigger Swap Event", function () {
   it("performs a Uniswap v3 swap and verifies event capture", async function () {
     // 1. Set up the swap on Arbitrum fork
     const provider = new ethers.providers.JsonRpcProvider(
-      "http://localhost:8545"
+      "http://localhost:8546"
     );
 
     // Using the test account from your memory

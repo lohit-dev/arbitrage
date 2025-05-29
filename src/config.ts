@@ -11,7 +11,6 @@ const configPath = path.join(__dirname, "..", "config.test.json");
 const configFile = fs.readFileSync(configPath, "utf8");
 export const config: Config = JSON.parse(configFile);
 
-// Add debug logs to see which RPC URLs are being used
 const ethereumRpc = process.env.ETHEREUM_RPC || "https://eth.llamarpc.com";
 const arbitrumRpc = process.env.ARBITRUM_RPC || "https://arb1.arbitrum.io/rpc";
 

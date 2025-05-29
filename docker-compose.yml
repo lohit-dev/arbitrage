@@ -1,0 +1,14 @@
+services:
+  arbitrum-explorer:
+    image: "otterscan/otterscan:latest"
+    container_name: arbitrum-explorer
+    environment:
+      ERIGON_URL: "http://localhost:8546"
+    ports:
+      - "5101:80"
+
+  ethereum-explorer:
+    image: "otterscan/otterscan:latest"
+    container_name: ethereum-explorer
+    ports:
+      - "5100:80"
