@@ -10,15 +10,21 @@ import { config } from "../config";
 import { logger } from "../utils/logger";
 import { SIMPLE_POOL_ABI, POOL_ABI } from "../contracts/abis";
 import { TradingService } from "./trading";
+import { DiscordNotificationService } from "./notification";
+import { discordConfig } from "../config";
 
 export class ArbitrageService {
   private networks: Map<string, NetworkRuntime> = new Map();
   private poolStates: Map<string, PoolState> = new Map();
   public tradingService: TradingService;
+  public discordNotifications: DiscordNotificationService;
 
   constructor(networks: Map<string, NetworkRuntime>) {
     this.networks = networks;
     this.tradingService = new TradingService(networks);
+    this.discordNotifications = new DiscordNotificationService(
+      discordConfig.webhookUrl
+    ); // Initialize
   }
 
   async handleSwapEvent(swapEvent: SwapEvent): Promise<void> {
@@ -259,6 +265,11 @@ export class ArbitrageService {
     logger.info(
       `⛽ Gas estimate: ${opportunity.gasEstimate.toLocaleString()} units`
     );
+
+    await this.discordNotifications.sendTradeNotification({
+      type: "OPPORTUNITY",
+      opportunity: opportunity,
+    });
 
     // Execute the arbitrage trade if auto-trading is enabled
     if (config.trading.autoTradeEnabled) {

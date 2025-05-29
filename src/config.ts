@@ -24,6 +24,11 @@ export const env = {
   WALLET_ADDRESS: process.env.WALLET_ADDRESS,
   LOG_LEVEL: process.env.LOG_LEVEL || "info",
   NODE_ENV: process.env.NODE_ENV || "development",
+  webhookUrl: process.env.DISCORD_WEBHOOK_URL || "",
+};
+
+export const discordConfig = {
+  webhookUrl: env.webhookUrl,
 };
 
 export const networkRpcUrls: Record<string, string> = {

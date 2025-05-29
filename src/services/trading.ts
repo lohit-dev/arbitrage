@@ -10,30 +10,34 @@ import {
 } from "@uniswap/v3-sdk";
 import { NetworkRuntime } from "../types";
 import { logger } from "../utils/logger";
-import { config, env } from "../config";
+import { config, discordConfig, env } from "../config";
 import { ERC20_ABI, POOL_ABI } from "../contracts/abis";
-import { abi as IUniswapV3PoolABI } from "@uniswap/v3-core/artifacts/contracts/interfaces/IUniswapV3Pool.sol/IUniswapV3Pool.json";
+import { DiscordNotificationService } from "./notification";
 
 // Uniswap V3 SwapRouter address is the same on both Ethereum and Arbitrum
 const SWAP_ROUTER_ADDRESS = "0xE592427A0AEce92De3Edee1F18E0157C05861564";
 
-// Maximum gas settings
-const MAX_FEE_PER_GAS = ethers.utils.parseUnits("100", "gwei");
-const MAX_PRIORITY_FEE_PER_GAS = ethers.utils.parseUnits("5", "gwei");
+// Fixed gas settings - these were way too high in your config
+const MAX_FEE_PER_GAS = ethers.utils.parseUnits("50", "gwei");
+const MAX_PRIORITY_FEE_PER_GAS = ethers.utils.parseUnits("2", "gwei");
 
 export class TradingService {
   private networks: Map<string, NetworkRuntime>;
   private wallet: ethers.Wallet;
+  private nonceManagers: Map<string, number> = new Map();
+  private pendingTransactions: Set<string> = new Set();
+  private discordNotifications: DiscordNotificationService;
 
   constructor(networks: Map<string, NetworkRuntime>) {
     this.networks = networks;
+    this.discordNotifications = new DiscordNotificationService(
+      discordConfig.webhookUrl
+    );
 
-    // Initialize wallet with private key
     if (!env.PRIVATE_KEY) {
       throw new Error("Private key not found in environment variables");
     }
 
-    // Use the Ethereum provider for the wallet (could be either network)
     const ethereumRuntime = this.networks.get("ethereum");
     if (!ethereumRuntime) {
       throw new Error("Ethereum network not found");
@@ -41,28 +45,195 @@ export class TradingService {
 
     this.wallet = new ethers.Wallet(env.PRIVATE_KEY, ethereumRuntime.provider);
     logger.info(`Trading wallet initialized: ${this.wallet.address}`);
+
+    this.discordNotifications.sendStartupNotification(this.wallet.address);
+
+    this.initializeNonceManagers();
   }
 
-  /**
-   * Execute an arbitrage trade between networks
-   * @param buyNetwork Network to buy on
-   * @param sellNetwork Network to sell on
-   * @param tokenSymbol Token to trade
-   * @param amount Amount to trade
-   * @returns Transaction hash of the sell transaction
-   */
+  private async initializeNonceManagers(): Promise<void> {
+    for (const [networkName, runtime] of this.networks.entries()) {
+      try {
+        const networkWallet = this.wallet.connect(runtime.provider);
+        const currentNonce = await networkWallet.getTransactionCount("pending");
+        this.nonceManagers.set(networkName, currentNonce);
+        logger.info(`Initialized nonce for ${networkName}: ${currentNonce}`);
+      } catch (error) {
+        logger.error(`Failed to initialize nonce for ${networkName}:`, error);
+      }
+    }
+  }
+
+  private getNextNonce(network: string): number {
+    const currentNonce = this.nonceManagers.get(network) || 0;
+    this.nonceManagers.set(network, currentNonce + 1);
+    return currentNonce;
+  }
+
+  private resetNonce(network: string): void {
+    const currentNonce = this.nonceManagers.get(network) || 0;
+    if (currentNonce > 0) {
+      this.nonceManagers.set(network, currentNonce - 1);
+    }
+  }
+
+  async checkWalletBalances(network: string): Promise<void> {
+    const networkRuntime = this.networks.get(network);
+    if (!networkRuntime) {
+      throw new Error(`Network ${network} not found`);
+    }
+
+    const networkWallet = this.wallet.connect(networkRuntime.provider);
+
+    logger.info(`\n=== Checking balances on ${network.toUpperCase()} ===`);
+
+    const ethBalance = await networkWallet.getBalance();
+    logger.info(`ETH Balance: ${ethers.utils.formatEther(ethBalance)} ETH`);
+
+    for (const [symbol, token] of Object.entries(networkRuntime.tokens)) {
+      if (symbol === "ETH") continue;
+
+      try {
+        const tokenContract = new ethers.Contract(
+          token.address,
+          ERC20_ABI,
+          networkWallet
+        );
+
+        const balance = await tokenContract.balanceOf(networkWallet.address);
+        const formattedBalance = ethers.utils.formatUnits(
+          balance,
+          token.decimals
+        );
+        logger.info(`${symbol} Balance: ${formattedBalance} ${symbol}`);
+
+        const allowance = await tokenContract.allowance(
+          networkWallet.address,
+          SWAP_ROUTER_ADDRESS
+        );
+        const formattedAllowance = ethers.utils.formatUnits(
+          allowance,
+          token.decimals
+        );
+        logger.info(
+          `${symbol} Allowance for SwapRouter: ${formattedAllowance} ${symbol}`
+        );
+      } catch (error) {
+        logger.error(`Error checking ${symbol} balance:`, error);
+      }
+    }
+    logger.info(`=== End of ${network.toUpperCase()} balances ===\n`);
+  }
+
+  private async checkTradeRequirements(
+    network: string,
+    tokenIn: Token,
+    amountIn: string
+  ): Promise<{ hasBalance: boolean; hasAllowance: boolean }> {
+    const networkRuntime = this.networks.get(network);
+    if (!networkRuntime) {
+      throw new Error(`Network ${network} not found`);
+    }
+
+    const networkWallet = this.wallet.connect(networkRuntime.provider);
+    const rawAmountIn = ethers.utils.parseUnits(amountIn, tokenIn.decimals);
+
+    let hasBalance = false;
+    let hasAllowance = false;
+
+    if (tokenIn.symbol === "WETH" || tokenIn.symbol === "ETH") {
+      const ethBalance = await networkWallet.getBalance();
+      hasBalance = ethBalance.gte(rawAmountIn);
+      logger.info(
+        `ETH Balance: ${ethers.utils.formatEther(
+          ethBalance
+        )} ETH, Required: ${amountIn} ETH`
+      );
+
+      if (tokenIn.symbol === "WETH") {
+        const tokenContract = new ethers.Contract(
+          tokenIn.address,
+          ERC20_ABI,
+          networkWallet
+        );
+        const allowance = await tokenContract.allowance(
+          networkWallet.address,
+          SWAP_ROUTER_ADDRESS
+        );
+        hasAllowance = allowance.gte(rawAmountIn);
+        logger.info(
+          `WETH Allowance: ${ethers.utils.formatUnits(
+            allowance,
+            tokenIn.decimals
+          )} WETH, Required: ${amountIn} WETH`
+        );
+      } else {
+        hasAllowance = true;
+      }
+    } else {
+      const tokenContract = new ethers.Contract(
+        tokenIn.address,
+        ERC20_ABI,
+        networkWallet
+      );
+
+      const balance = await tokenContract.balanceOf(networkWallet.address);
+      hasBalance = balance.gte(rawAmountIn);
+      logger.info(
+        `${tokenIn.symbol} Balance: ${ethers.utils.formatUnits(
+          balance,
+          tokenIn.decimals
+        )} ${tokenIn.symbol}, Required: ${amountIn} ${tokenIn.symbol}`
+      );
+
+      const allowance = await tokenContract.allowance(
+        networkWallet.address,
+        SWAP_ROUTER_ADDRESS
+      );
+      hasAllowance = allowance.gte(rawAmountIn);
+      logger.info(
+        `${tokenIn.symbol} Allowance: ${ethers.utils.formatUnits(
+          allowance,
+          tokenIn.decimals
+        )} ${tokenIn.symbol}, Required: ${amountIn} ${tokenIn.symbol}`
+      );
+    }
+
+    return { hasBalance, hasAllowance };
+  }
+
   async executeArbitrage(
     buyNetwork: string,
     sellNetwork: string,
     tokenSymbol: string,
     amount: string
   ): Promise<string> {
-    logger.info(
-      `Executing arbitrage: Buy ${tokenSymbol} on ${buyNetwork}, Sell on ${sellNetwork}, Amount: ${amount}`
-    );
+    const tradeKey = `${buyNetwork}-${sellNetwork}-${tokenSymbol}-${amount}`;
+
+    if (this.pendingTransactions.has(tradeKey)) {
+      logger.warn(`Arbitrage trade already in progress: ${tradeKey}`);
+      throw new Error("Trade already in progress");
+    }
+
+    this.pendingTransactions.add(tradeKey);
 
     try {
-      // 1. Buy tokens on the first network
+      logger.info(
+        `Executing arbitrage: Buy ${tokenSymbol} on ${buyNetwork}, Sell on ${sellNetwork}, Amount: ${amount}`
+      );
+
+      await this.checkWalletBalances(buyNetwork);
+      await this.checkWalletBalances(sellNetwork);
+
+      // Send trade start notification
+      await this.discordNotifications.sendTradeNotification({
+        type: "TRADE_START",
+        network: buyNetwork,
+        tokenIn: "WETH",
+        tokenOut: tokenSymbol,
+        amount: amount,
+      });
+
       const buyTxHash = await this.executeTrade(
         buyNetwork,
         "WETH",
@@ -71,20 +242,35 @@ export class TradingService {
       );
       logger.info(`Buy transaction successful: ${buyTxHash}`);
 
-      // 2. Wait for the transaction to be mined
+      await this.discordNotifications.sendTradeNotification({
+        type: "TRADE_SUCCESS",
+        network: buyNetwork,
+        tokenIn: "WETH",
+        tokenOut: tokenSymbol,
+        amount: amount,
+        txHash: buyTxHash,
+      });
+
       const buyNetworkRuntime = this.networks.get(buyNetwork);
       if (!buyNetworkRuntime) {
         throw new Error(`Network ${buyNetwork} not found`);
       }
 
       const buyReceipt = await buyNetworkRuntime.provider.waitForTransaction(
-        buyTxHash
+        buyTxHash,
+        1,
+        300000
       );
       logger.info(`Buy transaction mined in block ${buyReceipt.blockNumber}`);
 
-      // 3. Sell tokens on the second network
-      // In a real cross-chain scenario, you would need to bridge the tokens first
-      // For testing purposes, we'll simulate this by just executing another trade
+      await this.discordNotifications.sendTradeNotification({
+        type: "TRADE_START",
+        network: sellNetwork,
+        tokenIn: tokenSymbol,
+        tokenOut: "WETH",
+        amount: amount,
+      });
+
       const sellTxHash = await this.executeTrade(
         sellNetwork,
         tokenSymbol,
@@ -92,22 +278,86 @@ export class TradingService {
         amount
       );
       logger.info(`Sell transaction successful: ${sellTxHash}`);
+      await this.discordNotifications.sendTradeNotification({
+        type: "TRADE_SUCCESS",
+        network: sellNetwork,
+        tokenIn: tokenSymbol,
+        tokenOut: "WETH",
+        amount: amount,
+        txHash: sellTxHash,
+      });
+
+      await this.sendBalanceUpdate();
 
       return sellTxHash;
     } catch (error) {
       logger.error("Error executing arbitrage:", error);
+      await this.discordNotifications.sendTradeNotification({
+        type: "TRADE_FAILED",
+        network: buyNetwork,
+        tokenIn: "WETH",
+        tokenOut: tokenSymbol,
+        amount: amount,
+        error: error instanceof Error ? error.message : "Unknown error",
+      });
       throw error;
+    } finally {
+      this.pendingTransactions.delete(tradeKey);
     }
   }
 
-  /**
-   * Execute a trade on a specific network
-   * @param network Network to trade on
-   * @param tokenInSymbol Input token symbol
-   * @param tokenOutSymbol Output token symbol
-   * @param amountIn Amount to trade (in full units, not wei)
-   * @returns Transaction hash
-   */
+  async sendBalanceUpdate(): Promise<void> {
+    try {
+      const balances: { [key: string]: string } = {};
+
+      for (const [networkName, networkRuntime] of this.networks.entries()) {
+        const networkWallet = this.wallet.connect(networkRuntime.provider);
+
+        // Get ETH balance
+        const ethBalance = await networkWallet.getBalance();
+        balances[
+          `${networkName.toUpperCase()} ETH`
+        ] = `${ethers.utils.formatEther(ethBalance)} ETH`;
+
+        // Get token balances
+        for (const [symbol, token] of Object.entries(networkRuntime.tokens)) {
+          if (symbol === "ETH") continue;
+
+          try {
+            const tokenContract = new ethers.Contract(
+              token.address,
+              ERC20_ABI,
+              networkWallet
+            );
+
+            const balance = await tokenContract.balanceOf(
+              networkWallet.address
+            );
+            const formattedBalance = ethers.utils.formatUnits(
+              balance,
+              token.decimals
+            );
+            balances[
+              `${networkName.toUpperCase()} ${symbol}`
+            ] = `${formattedBalance} ${symbol}`;
+          } catch (error) {
+            logger.error(
+              `Error getting ${symbol} balance on ${networkName}:`,
+              error
+            );
+          }
+        }
+      }
+
+      await this.discordNotifications.sendTradeNotification({
+        type: "BALANCE_UPDATE",
+        balances: balances,
+      });
+    } catch (error) {
+      logger.error("Error sending balance update:", error);
+    }
+  }
+
   async executeTrade(
     network: string,
     tokenInSymbol: string,
@@ -119,7 +369,6 @@ export class TradingService {
       throw new Error(`Network ${network} not found`);
     }
 
-    // Get token information
     const tokenIn = networkRuntime.tokens[tokenInSymbol];
     const tokenOut = networkRuntime.tokens[tokenOutSymbol];
 
@@ -129,8 +378,31 @@ export class TradingService {
       );
     }
 
-    // Create wallet connected to this network
     const networkWallet = this.wallet.connect(networkRuntime.provider);
+
+    logger.info(`\n=== Pre-trade checks for ${network.toUpperCase()} ===`);
+
+    const { hasBalance, hasAllowance } = await this.checkTradeRequirements(
+      network,
+      tokenIn,
+      amountIn
+    );
+
+    if (!hasBalance) {
+      throw new Error(`Insufficient ${tokenInSymbol} balance for trade`);
+    }
+
+    if (!hasAllowance) {
+      logger.info(`Insufficient allowance, approving token spending...`);
+      await this.approveTokenSpending(
+        network,
+        tokenIn.address,
+        SWAP_ROUTER_ADDRESS,
+        ethers.utils.parseUnits(amountIn, tokenIn.decimals).toString()
+      );
+    }
+
+    logger.info(`=== Starting trade execution ===`);
 
     // 1. Get pool information
     const poolInfo = await this.getPoolInfo(network, tokenIn, tokenOut);
@@ -153,36 +425,53 @@ export class TradingService {
       .parseUnits(amountIn, tokenIn.decimals)
       .toString();
 
-    // 5. Get output quote
-    const amountOut = await this.getOutputQuote(
+    // 5. Get fresh quote right before trade execution
+    const quoteAmountOut = await this.getOutputQuote(
       network,
       route,
       tokenIn,
       rawAmountIn
     );
 
-    // 6. Create an unchecked trade
+    logger.info(
+      `Quote output: ${ethers.utils.formatUnits(
+        quoteAmountOut,
+        tokenOut.decimals
+      )} ${tokenOutSymbol}`
+    );
+
+    // 6. Apply slippage tolerance to get minimum amount out
+    const slippageTolerance = parseFloat(config.trading.maxSlippage) || 0.005; // 0.5% default
+    const minAmountOut = quoteAmountOut
+      .mul(ethers.BigNumber.from(Math.floor((1 - slippageTolerance) * 10000)))
+      .div(10000);
+
+    logger.info(
+      `Minimum amount out (with ${(slippageTolerance * 100).toFixed(
+        2
+      )}% slippage): ${ethers.utils.formatUnits(
+        minAmountOut,
+        tokenOut.decimals
+      )} ${tokenOutSymbol}`
+    );
+
+    // 7. Create trade with realistic output amount
     const uncheckedTrade = Trade.createUncheckedTrade({
       route,
       inputAmount: CurrencyAmount.fromRawAmount(tokenIn, rawAmountIn),
       outputAmount: CurrencyAmount.fromRawAmount(
         tokenOut,
-        amountOut.toString()
+        minAmountOut.toString()
       ),
       tradeType: TradeType.EXACT_INPUT,
     });
 
-    // 7. Approve token spending
-    await this.approveTokenSpending(
-      network,
-      tokenIn.address,
-      SWAP_ROUTER_ADDRESS,
-      rawAmountIn
-    );
-
-    // 8. Execute the trade
+    // 8. Set swap options with reasonable slippage
     const options: SwapOptions = {
-      slippageTolerance: new Percent(50, 10_000), // 0.5%
+      slippageTolerance: new Percent(
+        Math.floor(slippageTolerance * 10000),
+        10000
+      ), // Convert to basis points
       deadline: Math.floor(Date.now() / 1000) + 60 * 20, // 20 minutes
       recipient: networkWallet.address,
     };
@@ -192,24 +481,44 @@ export class TradingService {
       options
     );
 
-    // 9. Send the transaction
-    const tx = await networkWallet.sendTransaction({
-      data: methodParameters.calldata,
-      to: SWAP_ROUTER_ADDRESS,
-      value: methodParameters.value,
-      gasLimit: 500000, // Set a reasonable gas limit
-    });
+    // 9. Get the next nonce for this network
+    const nonce = this.getNextNonce(network);
 
-    logger.info(
-      `Trade executed on ${network}: ${tokenInSymbol} -> ${tokenOutSymbol}, Amount: ${amountIn}, Tx: ${tx.hash}`
-    );
+    try {
+      // 10. Execute the transaction
+      const tx = await networkWallet.sendTransaction({
+        data: methodParameters.calldata,
+        to: SWAP_ROUTER_ADDRESS,
+        value: methodParameters.value,
+        gasLimit: 500000,
+        maxFeePerGas: MAX_FEE_PER_GAS,
+        maxPriorityFeePerGas: MAX_PRIORITY_FEE_PER_GAS,
+        nonce: nonce,
+        type: 2,
+      });
 
-    return tx.hash;
+      logger.info(
+        `Trade executed on ${network}: ${tokenInSymbol} -> ${tokenOutSymbol}, Amount: ${amountIn}, Nonce: ${nonce}, Tx: ${tx.hash}`
+      );
+
+      return tx.hash;
+    } catch (error) {
+      this.resetNonce(network);
+      logger.error(`Trade failed on ${network}, nonce reset:`, error);
+
+      await this.discordNotifications.sendTradeNotification({
+        type: "TRADE_FAILED",
+        network: network,
+        tokenIn: tokenInSymbol,
+        tokenOut: tokenOutSymbol,
+        amount: amountIn,
+        error: error instanceof Error ? error.message : "Unknown error",
+      });
+
+      throw error;
+    }
   }
 
-  /**
-   * Get pool information for a token pair
-   */
   private async getPoolInfo(
     network: string,
     tokenA: Token,
@@ -225,7 +534,6 @@ export class TradingService {
       throw new Error(`Network ${network} not found`);
     }
 
-    // Find the pool address from config
     const pools = config.pools[network];
     let poolAddress: string | undefined;
 
@@ -248,14 +556,12 @@ export class TradingService {
       );
     }
 
-    // Create a contract instance for the pool
     const poolContract = new ethers.Contract(
       poolAddress,
       POOL_ABI,
       networkRuntime.provider
     );
 
-    // Get pool data
     const [fee, liquidity, slot0] = await Promise.all([
       poolContract.fee(),
       poolContract.liquidity(),
@@ -270,9 +576,6 @@ export class TradingService {
     };
   }
 
-  /**
-   * Get output quote for a route
-   */
   private async getOutputQuote(
     network: string,
     route: Route<Token, Token>,
@@ -284,21 +587,11 @@ export class TradingService {
       throw new Error(`Network ${network} not found`);
     }
 
-    // Get the encoded path from the route
     const path = encodeRouteToPath(route, false);
 
-    // Format the amount in
-    const formattedAmountIn = ethers.utils
-      .parseUnits(amountIn, tokenIn.decimals)
-      .toString();
-
     try {
-      // Use the quoter contract to get the output amount
       const quoteAmount =
-        await networkRuntime.quoter.callStatic.quoteExactInput(
-          path,
-          formattedAmountIn
-        );
+        await networkRuntime.quoter.callStatic.quoteExactInput(path, amountIn);
 
       return quoteAmount;
     } catch (error) {
@@ -307,9 +600,6 @@ export class TradingService {
     }
   }
 
-  /**
-   * Approve token spending
-   */
   private async approveTokenSpending(
     network: string,
     tokenAddress: string,
@@ -321,36 +611,92 @@ export class TradingService {
       throw new Error(`Network ${network} not found`);
     }
 
-    // Create wallet connected to this network
     const networkWallet = this.wallet.connect(networkRuntime.provider);
-
-    // Create token contract
     const tokenContract = new ethers.Contract(
       tokenAddress,
       ERC20_ABI,
       networkWallet
     );
 
-    // Check current allowance
+    const tokenSymbol = await tokenContract.symbol();
+    const tokenDecimals = await tokenContract.decimals();
+
+    logger.info(`\n=== Token Approval Process ===`);
+    logger.info(`Token: ${tokenSymbol} (${tokenAddress})`);
+    logger.info(`Spender: ${spenderAddress}`);
+    logger.info(
+      `Amount: ${ethers.utils.formatUnits(
+        amount,
+        tokenDecimals
+      )} ${tokenSymbol}`
+    );
+
     const currentAllowance = await tokenContract.allowance(
       networkWallet.address,
       spenderAddress
     );
 
-    // If current allowance is less than amount, approve
-    if (currentAllowance.lt(amount)) {
-      logger.info(
-        `Approving ${spenderAddress} to spend ${amount} of token ${tokenAddress}`
-      );
+    logger.info(
+      `Current Allowance: ${ethers.utils.formatUnits(
+        currentAllowance,
+        tokenDecimals
+      )} ${tokenSymbol}`
+    );
 
+    logger.info(
+      `Approving exact amount: ${ethers.utils.formatUnits(
+        amount,
+        tokenDecimals
+      )} ${tokenSymbol}`
+    );
+
+    const nonce = this.getNextNonce(network);
+
+    try {
       const tx = await tokenContract.approve(spenderAddress, amount, {
         gasLimit: 100000,
+        maxFeePerGas: MAX_FEE_PER_GAS,
+        maxPriorityFeePerGas: MAX_PRIORITY_FEE_PER_GAS,
+        nonce: nonce,
+        type: 2,
       });
 
+      logger.info(`Approval transaction sent: ${tx.hash}, nonce: ${nonce}`);
       await tx.wait();
-      logger.info(`Approval successful: ${tx.hash}`);
-    } else {
-      logger.info("Token spending already approved");
+
+      const newAllowance = await tokenContract.allowance(
+        networkWallet.address,
+        spenderAddress
+      );
+
+      logger.info(
+        `New Allowance: ${ethers.utils.formatUnits(
+          newAllowance,
+          tokenDecimals
+        )} ${tokenSymbol}`
+      );
+      logger.info(`Approval successful!`);
+      logger.info(`=== End of Approval Process ===\n`);
+    } catch (error) {
+      this.resetNonce(network);
+      logger.error(`Approval failed, nonce reset:`, error);
+      throw error;
+    }
+  }
+
+  async refreshNonce(network: string): Promise<void> {
+    const networkRuntime = this.networks.get(network);
+    if (!networkRuntime) {
+      throw new Error(`Network ${network} not found`);
+    }
+
+    try {
+      const networkWallet = this.wallet.connect(networkRuntime.provider);
+      const currentNonce = await networkWallet.getTransactionCount("pending");
+      this.nonceManagers.set(network, currentNonce);
+      logger.info(`Refreshed nonce for ${network}: ${currentNonce}`);
+    } catch (error) {
+      logger.error(`Failed to refresh nonce for ${network}:`, error);
     }
   }
 }
