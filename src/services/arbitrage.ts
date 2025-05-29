@@ -18,6 +18,8 @@ export class ArbitrageService {
   private poolStates: Map<string, PoolState> = new Map();
   public tradingService: TradingService;
   public discordNotifications: DiscordNotificationService;
+  private isTrading: boolean = false; // Add this flag
+  private pendingOpportunities: ArbitrageOpportunity[] = []; // Add this queue
 
   constructor(networks: Map<string, NetworkRuntime>) {
     this.networks = networks;
@@ -28,81 +30,20 @@ export class ArbitrageService {
   }
 
   async handleSwapEvent(swapEvent: SwapEvent): Promise<void> {
-    await this.updatePoolState(swapEvent);
+    // If we're currently trading, queue the event for later
+    if (this.isTrading) {
+      logger.info("Trade in progress, deferring swap event processing...");
+      return;
+    }
 
     try {
-      logger.info("Checking for arbitrage opportunities after swap event...");
-
-      // Get quotes from both networks
-      const ethQuote = await this.getQuote(
-        "ethereum",
-        "SEED",
-        "WETH",
-        config.trading.defaultTradeAmount
-      );
-
-      const arbQuote = await this.getQuote(
-        "arbitrum",
-        "SEED",
-        "WETH",
-        config.trading.defaultTradeAmount
-      );
-
-      // Convert to float for comparison
-      const ethPrice = parseFloat(ethers.utils.formatEther(ethQuote));
-      const arbPrice = parseFloat(ethers.utils.formatEther(arbQuote));
-
-      // Determine arbitrage direction
-      let buyNetwork, sellNetwork, buyPrice, sellPrice;
-
-      if (ethPrice < arbPrice) {
-        buyNetwork = "ethereum";
-        sellNetwork = "arbitrum";
-        buyPrice = ethPrice;
-        sellPrice = arbPrice;
-      } else {
-        buyNetwork = "arbitrum";
-        sellNetwork = "ethereum";
-        buyPrice = arbPrice;
-        sellPrice = ethPrice;
-      }
-
-      const priceDifference = Math.abs(sellPrice - buyPrice);
-      const profitPercentage = priceDifference / buyPrice;
-
-      // Check if profit exceeds threshold
-      const minProfitThreshold = parseFloat(config.trading.minProfitThreshold);
-
-      logger.info(
-        `Price difference: ${(profitPercentage * 100).toFixed(
-          2
-        )}% (threshold: ${(minProfitThreshold * 100).toFixed(2)}%)`
-      );
-
-      if (profitPercentage >= minProfitThreshold) {
-        const tradeAmount = parseFloat(
-          ethers.utils.formatEther(config.trading.defaultTradeAmount)
-        );
-        const profitEstimate = (priceDifference * tradeAmount).toString();
-
-        const opportunity: ArbitrageOpportunity = {
-          buyNetwork,
-          sellNetwork,
-          buyPrice: buyPrice.toString(),
-          sellPrice: sellPrice.toString(),
-          priceDifference: priceDifference.toString(),
-          profitEstimate,
-          gasEstimate: this.estimateGasCosts(buyNetwork, sellNetwork),
-          timestamp: Date.now(),
-        };
-
-        logger.info("🚨 ARBITRAGE OPPORTUNITY DETECTED!");
-        await this.handleArbitrageOpportunity(opportunity);
-      } else {
-        logger.info("No profitable arbitrage opportunity found");
-      }
+      this.isTrading = true;
+      await this.updatePoolState(swapEvent);
+      await this.checkArbitrageOpportunity();
     } catch (error) {
-      logger.error("Error checking for arbitrage opportunities:", error);
+      logger.error("Error processing swap event:", error);
+    } finally {
+      this.isTrading = false;
     }
   }
 
@@ -170,7 +111,8 @@ export class ArbitrageService {
     }
   }
 
-  private async checkArbitrageOpportunity(): Promise<ArbitrageOpportunity | null> {
+
+  async checkArbitrageOpportunity(): Promise<ArbitrageOpportunity | null> {
     const ethereumPool = this.poolStates.get(
       "ethereum-" + config.pools.ethereum[0].address
     );
@@ -243,59 +185,113 @@ export class ArbitrageService {
     return buyGas + sellGas;
   }
 
-  private async handleArbitrageOpportunity(
+  async handleArbitrageOpportunity(
     opportunity: ArbitrageOpportunity
   ): Promise<void> {
-    logger.info("🚨 ARBITRAGE OPPORTUNITY DETECTED!");
-    logger.info(
-      `💰 Buy on ${opportunity.buyNetwork} at ${parseFloat(
-        opportunity.buyPrice
-      ).toFixed(8)} WETH`
-    );
-    logger.info(
-      `💰 Sell on ${opportunity.sellNetwork} at ${parseFloat(
-        opportunity.sellPrice
-      ).toFixed(8)} WETH`
-    );
-    logger.info(
-      `📈 Estimated profit: ${parseFloat(opportunity.profitEstimate).toFixed(
-        6
-      )} WETH`
-    );
-    logger.info(
-      `⛽ Gas estimate: ${opportunity.gasEstimate.toLocaleString()} units`
-    );
+    if (this.isTrading) {
+      logger.info("Trade already in progress, skipping opportunity");
+      return;
+    }
 
-    await this.discordNotifications.sendTradeNotification({
-      type: "OPPORTUNITY",
-      opportunity: opportunity,
-    });
+    try {
+      this.isTrading = true;
 
-    // Execute the arbitrage trade if auto-trading is enabled
-    if (config.trading.autoTradeEnabled) {
-      try {
-        logger.info("🤖 Auto-trading is enabled. Executing arbitrage trade...");
+      logger.info("🚨 ARBITRAGE OPPORTUNITY DETECTED!");
+      logger.info(
+        `💰 Buy on ${opportunity.buyNetwork} at ${parseFloat(
+          opportunity.buyPrice
+        ).toFixed(8)} WETH`
+      );
+      logger.info(
+        `💰 Sell on ${opportunity.sellNetwork} at ${parseFloat(
+          opportunity.sellPrice
+        ).toFixed(8)} WETH`
+      );
+      logger.info(
+        `📈 Estimated profit: ${parseFloat(opportunity.profitEstimate).toFixed(
+          6
+        )} WETH`
+      );
+      logger.info(
+        `⛽ Gas estimate: ${opportunity.gasEstimate.toLocaleString()} units`
+      );
 
-        // Get the trade amount from config
-        const tradeAmount = ethers.utils.formatEther(
-          config.trading.defaultTradeAmount
-        );
+      await this.discordNotifications.sendTradeNotification({
+        type: "OPPORTUNITY",
+        opportunity: opportunity,
+      });
 
-        // Execute the arbitrage trade
-        const txHash = await this.tradingService.executeArbitrage(
-          opportunity.buyNetwork,
-          opportunity.sellNetwork,
-          "SEED", // The token we're trading (from your config)
-          tradeAmount
-        );
+      if (config.trading.autoTradeEnabled) {
+        try {
+          logger.info("🤖 Auto-trading is enabled. Executing arbitrage trade...");
+          const tradeAmount = ethers.utils.formatEther(config.trading.defaultTradeAmount);
 
-        logger.info(`✅ Arbitrage trade completed successfully! Tx: ${txHash}`);
-        logger.info(`💰 Expected profit: ${opportunity.profitEstimate} WETH`);
-      } catch (error) {
-        logger.error("❌ Failed to execute arbitrage trade:", error);
+          const txHash = await this.tradingService.executeArbitrage(
+            opportunity.buyNetwork,
+            opportunity.sellNetwork,
+            "SEED",
+            tradeAmount
+          );
+
+          logger.info(`✅ Arbitrage trade completed successfully! Tx: ${txHash}`);
+          logger.info(`💰 Expected profit: ${opportunity.profitEstimate} WETH`);
+
+          // Wait for transaction confirmation
+          const network = this.networks.get(opportunity.buyNetwork);
+          if (network) {
+            await network.provider.waitForTransaction(txHash, 1);
+            logger.info("Trade confirmed on blockchain");
+          }
+        } catch (error) {
+          logger.error("❌ Failed to execute arbitrage trade:", error);
+        }
+      } else {
+        logger.info("🛑 Auto-trading is disabled. Skipping trade execution.");
       }
-    } else {
-      logger.info("🛑 Auto-trading is disabled. Skipping trade execution.");
+    } finally {
+      this.isTrading = false;
+
+      // Process any pending opportunities if they're still profitable
+      if (this.pendingOpportunities.length > 0) {
+        logger.info("Processing next pending opportunity...");
+        const nextOpportunity = this.pendingOpportunities.shift();
+        if (nextOpportunity) {
+          // Verify the opportunity is still valid before executing
+          const isStillProfitable = await this.verifyOpportunity(nextOpportunity);
+          if (isStillProfitable) {
+            await this.handleArbitrageOpportunity(nextOpportunity);
+          }
+        }
+      }
+    }
+  }
+
+  // Add this helper method to verify if an opportunity is still profitable
+  private async verifyOpportunity(opportunity: ArbitrageOpportunity): Promise<boolean> {
+    try {
+      const buyQuote = await this.getQuote(
+        opportunity.buyNetwork,
+        "SEED",
+        "WETH",
+        config.trading.defaultTradeAmount
+      );
+
+      const sellQuote = await this.getQuote(
+        opportunity.sellNetwork,
+        "SEED",
+        "WETH",
+        config.trading.defaultTradeAmount
+      );
+
+      const buyPrice = parseFloat(ethers.utils.formatEther(buyQuote));
+      const sellPrice = parseFloat(ethers.utils.formatEther(sellQuote));
+      const profitPercentage = (sellPrice - buyPrice) / buyPrice;
+      const minProfitThreshold = parseFloat(config.trading.minProfitThreshold);
+
+      return profitPercentage >= minProfitThreshold;
+    } catch (error) {
+      logger.error("Error verifying opportunity:", error);
+      return false;
     }
   }
 
@@ -332,10 +328,11 @@ export class ArbitrageService {
           amountIn,
           0 // sqrtPriceLimitX96: 0 to accept any price impact
         );
-
+      logger.info(
+        `Quote for ${amountIn} ${tokenIn} on ${network} pool: ${JSON.stringify(poolInfo)} is ${quote} `)
       return quote.toString();
     } catch (error) {
-      logger.error(`❌ Quote failed for ${network}:`, error);
+      logger.error(`❌ Quote failed for ${network}: `, error);
       throw error;
     }
   }

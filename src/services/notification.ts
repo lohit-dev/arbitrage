@@ -4,12 +4,7 @@ import { logger } from "../utils/logger";
 import { ArbitrageOpportunity } from "../types";
 
 export interface TradeNotification {
-  type:
-    | "OPPORTUNITY"
-    | "TRADE_START"
-    | "TRADE_SUCCESS"
-    | "TRADE_FAILED"
-    | "BALANCE_UPDATE";
+  type: 'OPPORTUNITY' | 'TRADE_START' | 'TRADE_SUCCESS' | 'TRADE_FAILED' | 'BALANCE_UPDATE';
   network?: string;
   tokenIn?: string;
   tokenOut?: string;
@@ -17,7 +12,14 @@ export interface TradeNotification {
   txHash?: string;
   error?: string;
   opportunity?: ArbitrageOpportunity;
-  balances?: { [key: string]: string };
+  balances?: {
+    [key: string]: {
+      amount: string;
+      previousAmount?: string;
+      usdValue?: string;
+      change?: string;
+    }
+  };
   gasUsed?: string;
   actualProfit?: string;
 }
@@ -271,15 +273,29 @@ export class DiscordNotificationService {
     timestamp: string
   ): EmbedBuilder {
     const balances = notification.balances!;
-    const fields = Object.entries(balances).map(([token, balance]) => ({
-      name: `💰 ${token}`,
-      value: balance,
-      inline: true,
-    }));
+    const fields = Object.entries(balances).map(([token, data]) => {
+      let value = `Current: ${data.amount}`;
+
+      if (data.previousAmount) {
+        const diff = parseFloat(data.amount) - parseFloat(data.previousAmount);
+        const sign = diff >= 0 ? '📈' : '📉';
+        value += `\nChange: ${sign} ${diff.toFixed(6)}`;
+      }
+
+      if (data.usdValue) {
+        value += `\n≈ $${data.usdValue}`;
+      }
+
+      return {
+        name: `💰 ${token}`,
+        value: value,
+        inline: true,
+      };
+    });
 
     return embed
       .setTitle("📊 WALLET BALANCE UPDATE")
-      .setColor(0x9932cc) // Purple
+      .setColor(0x9932cc)
       .addFields(fields)
       .setFooter({ text: `Updated at ${timestamp}` })
       .setTimestamp();

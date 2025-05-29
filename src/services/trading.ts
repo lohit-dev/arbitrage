@@ -23,10 +23,13 @@ const MAX_PRIORITY_FEE_PER_GAS = ethers.utils.parseUnits("2", "gwei");
 
 export class TradingService {
   private networks: Map<string, NetworkRuntime>;
-  private wallet: ethers.Wallet;
+  public wallet: ethers.Wallet;
   private nonceManagers: Map<string, number> = new Map();
   private pendingTransactions: Set<string> = new Set();
   private discordNotifications: DiscordNotificationService;
+
+
+  private previousBalances: { [key: string]: string } = {};
 
   constructor(networks: Map<string, NetworkRuntime>) {
     this.networks = networks;
@@ -308,16 +311,30 @@ export class TradingService {
 
   async sendBalanceUpdate(): Promise<void> {
     try {
-      const balances: { [key: string]: string } = {};
+      const balances: {
+        [key: string]: {
+          amount: string;
+          previousAmount?: string;
+          usdValue?: string;
+          change?: string;
+        }
+      } = {};
 
       for (const [networkName, networkRuntime] of this.networks.entries()) {
         const networkWallet = this.wallet.connect(networkRuntime.provider);
 
         // Get ETH balance
         const ethBalance = await networkWallet.getBalance();
-        balances[
-          `${networkName.toUpperCase()} ETH`
-        ] = `${ethers.utils.formatEther(ethBalance)} ETH`;
+        const ethAmount = ethers.utils.formatEther(ethBalance);
+        const key = `${networkName.toUpperCase()} ETH`;
+
+        balances[key] = {
+          amount: `${ethAmount} ETH`,
+          previousAmount: this.previousBalances[key],
+          // You can add price feed here to get USD value
+          usdValue: await this.getUSDValue(ethAmount, 'ETH')
+        };
+        this.previousBalances[key] = balances[key].amount;
 
         // Get token balances
         for (const [symbol, token] of Object.entries(networkRuntime.tokens)) {
@@ -330,16 +347,20 @@ export class TradingService {
               networkWallet
             );
 
-            const balance = await tokenContract.balanceOf(
-              networkWallet.address
-            );
+            const balance = await tokenContract.balanceOf(networkWallet.address);
             const formattedBalance = ethers.utils.formatUnits(
               balance,
               token.decimals
             );
-            balances[
-              `${networkName.toUpperCase()} ${symbol}`
-            ] = `${formattedBalance} ${symbol}`;
+            const key = `${networkName.toUpperCase()} ${symbol}`;
+
+            balances[key] = {
+              amount: `${formattedBalance} ${symbol}`,
+              previousAmount: this.previousBalances[key],
+              usdValue: await this.getUSDValue(formattedBalance, symbol)
+            };
+            this.previousBalances[key] = balances[key].amount;
+
           } catch (error) {
             logger.error(
               `Error getting ${symbol} balance on ${networkName}:`,
@@ -356,6 +377,20 @@ export class TradingService {
     } catch (error) {
       logger.error("Error sending balance update:", error);
     }
+  }
+
+  // Helper method to get USD value (you'll need to implement price feed integration)
+  private async getUSDValue(amount: string, symbol: string): Promise<string> {
+    // TODO: Implement price feed integration (e.g. CoinGecko, Chainlink)
+    // For now returning dummy values
+    const dummyPrices: { [key: string]: number } = {
+      'ETH': 2000,
+      'WETH': 2000,
+      'SEED': 1
+    };
+
+    const price = dummyPrices[symbol] || 0;
+    return (parseFloat(amount) * price).toFixed(2);
   }
 
   async executeTrade(
