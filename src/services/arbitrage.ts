@@ -338,82 +338,70 @@ export class ArbitrageService {
     return buyGas + sellGas;
   }
 
-  async handleArbitrageOpportunity(
-    opportunity: ArbitrageOpportunity
-  ): Promise<void> {
-    if (this.isTrading) {
-      logger.info("Trade already in progress, skipping opportunity");
-      return;
-    }
+  async handleArbitrageOpportunity(opportunity: ArbitrageOpportunity): Promise<void> {
+      try {
+          this.isTrading = true;
 
-    // Check cooldown
-    if (Date.now() - this.lastTradeTimestamp < this.COOLDOWN_PERIOD) {
-      logger.info("In cooldown period, skipping opportunity");
-      return;
-    }
-
-    try {
-      this.isTrading = true;
-
-      logger.info("🚨 ARBITRAGE OPPORTUNITY DETECTED!");
-      logger.info(
-        `💰 Buy on ${opportunity.buyNetwork} at ${parseFloat(
-          opportunity.buyPrice
-        ).toFixed(8)} WETH`
-      );
-      logger.info(
-        `💰 Sell on ${opportunity.sellNetwork} at ${parseFloat(
-          opportunity.sellPrice
-        ).toFixed(8)} WETH`
-      );
-      logger.info(
-        `📈 Estimated profit: ${parseFloat(opportunity.profitEstimate).toFixed(
-          6
-        )} WETH`
-      );
-      logger.info(
-        `⛽ Gas estimate: ${opportunity.gasEstimate.toLocaleString()} units`
-      );
-
-      await this.discordNotifications.sendTradeNotification({
-        type: "OPPORTUNITY",
-        opportunity: opportunity,
-      });
-
-      if (config.trading.autoTradeEnabled) {
-        try {
+          logger.info("🚨 ARBITRAGE OPPORTUNITY DETECTED!");
           logger.info(
-            "🤖 Auto-trading is enabled. Executing arbitrage trade..."
+            `💰 Buy on ${opportunity.buyNetwork} at ${parseFloat(
+              opportunity.buyPrice
+            ).toFixed(8)} WETH`
           );
-
-          const tradeAmount = ethers.utils.formatEther(
-            config.trading.defaultTradeAmount
-          );
-
-          const txHash = await this.tradingService.executeArbitrage(
-            opportunity.buyNetwork,
-            opportunity.sellNetwork,
-            "SEED",
-            tradeAmount
-          );
-
           logger.info(
-            `✅ Arbitrage trade completed successfully! Tx: ${txHash}`
+            `💰 Sell on ${opportunity.sellNetwork} at ${parseFloat(
+              opportunity.sellPrice
+            ).toFixed(8)} WETH`
           );
-          logger.info(`💰 Expected profit: ${opportunity.profitEstimate} WETH`);
+          logger.info(
+            `📈 Estimated profit: ${parseFloat(opportunity.profitEstimate).toFixed(
+              6
+            )} WETH`
+          );
+          logger.info(
+            `⛽ Gas estimate: ${opportunity.gasEstimate.toLocaleString()} units`
+          );
 
-          // Update timestamp after successful trade
-          this.lastTradeTimestamp = Date.now();
-        } catch (error) {
-          logger.error("❌ Failed to execute arbitrage trade:", error);
+          await this.discordNotifications.sendTradeNotification({
+            type: "OPPORTUNITY",
+            opportunity: opportunity,
+          });
+
+          if (config.trading.autoTradeEnabled) {
+            try {
+              logger.info(
+                "🤖 Auto-trading is enabled. Executing arbitrage trade..."
+              );
+
+              const tradeAmount = ethers.utils.formatEther(
+                config.trading.defaultTradeAmount
+              );
+
+              const txHash = await this.tradingService.executeArbitrage(
+                opportunity.buyNetwork,
+                opportunity.sellNetwork,
+                "SEED",
+                tradeAmount
+              );
+
+              logger.info(
+                `✅ Arbitrage trade completed successfully! Tx: ${txHash}`
+              );
+              logger.info(`💰 Expected profit: ${opportunity.profitEstimate} WETH`);
+
+              // Update timestamp after successful trade
+              this.lastTradeTimestamp = Date.now();
+            } catch (error) {
+              logger.error("❌ Failed to execute arbitrage trade:", error);
+            }
+          } else {
+            logger.info("🛑 Auto-trading is disabled. Skipping trade execution.");
+          }
+        } finally {
+          this.isTrading = false;
+          this.lastTradeTimestamp = Date.now(); // Update timestamp after trade
         }
-      } else {
-        logger.info("🛑 Auto-trading is disabled. Skipping trade execution.");
-      }
-    } finally {
-      this.isTrading = false;
     }
-  }
 
   // ✅ NEW: Get real USD price using Uniswap quoter instead of dummy values
   async getUSDPrice(tokenSymbol: string, amount: string): Promise<string> {
