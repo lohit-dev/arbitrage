@@ -111,7 +111,6 @@ export class ArbitrageService {
     }
   }
 
-
   async checkArbitrageOpportunity(): Promise<ArbitrageOpportunity | null> {
     const ethereumPool = this.poolStates.get(
       "ethereum-" + config.pools.ethereum[0].address
@@ -223,8 +222,12 @@ export class ArbitrageService {
 
       if (config.trading.autoTradeEnabled) {
         try {
-          logger.info("🤖 Auto-trading is enabled. Executing arbitrage trade...");
-          const tradeAmount = ethers.utils.formatEther(config.trading.defaultTradeAmount);
+          logger.info(
+            "🤖 Auto-trading is enabled. Executing arbitrage trade..."
+          );
+          const tradeAmount = ethers.utils.formatEther(
+            config.trading.defaultTradeAmount
+          );
 
           const txHash = await this.tradingService.executeArbitrage(
             opportunity.buyNetwork,
@@ -233,7 +236,9 @@ export class ArbitrageService {
             tradeAmount
           );
 
-          logger.info(`✅ Arbitrage trade completed successfully! Tx: ${txHash}`);
+          logger.info(
+            `✅ Arbitrage trade completed successfully! Tx: ${txHash}`
+          );
           logger.info(`💰 Expected profit: ${opportunity.profitEstimate} WETH`);
 
           // Wait for transaction confirmation
@@ -257,7 +262,9 @@ export class ArbitrageService {
         const nextOpportunity = this.pendingOpportunities.shift();
         if (nextOpportunity) {
           // Verify the opportunity is still valid before executing
-          const isStillProfitable = await this.verifyOpportunity(nextOpportunity);
+          const isStillProfitable = await this.verifyOpportunity(
+            nextOpportunity
+          );
           if (isStillProfitable) {
             await this.handleArbitrageOpportunity(nextOpportunity);
           }
@@ -267,7 +274,9 @@ export class ArbitrageService {
   }
 
   // Add this helper method to verify if an opportunity is still profitable
-  private async verifyOpportunity(opportunity: ArbitrageOpportunity): Promise<boolean> {
+  private async verifyOpportunity(
+    opportunity: ArbitrageOpportunity
+  ): Promise<boolean> {
     try {
       const buyQuote = await this.getQuote(
         opportunity.buyNetwork,
@@ -317,7 +326,7 @@ export class ArbitrageService {
       }
 
       const poolInfo: PoolInfo = await this.getPoolInfo(network);
-      // https: docs.uniswap.org / sdk / v3 / guides / swaps / quoting;
+      // https:docs.uniswap.org/sdk/v3/guides/swaps/quoting;
       // Given the amount you want to swap, produces a quote for the amount out for a swap of a single pool - quoteExactInputSingle
       const quote: string =
         // see abi for this things params
@@ -328,8 +337,11 @@ export class ArbitrageService {
           amountIn,
           0 // sqrtPriceLimitX96: 0 to accept any price impact
         );
-      logger.info(
-        `Quote for ${amountIn} ${tokenIn} on ${network} pool: ${JSON.stringify(poolInfo)} is ${quote} `)
+      // logger.info(
+      //   `Quote for ${amountIn} ${tokenIn} on ${network} pool: ${JSON.stringify(
+      //     poolInfo
+      //   )} is ${quote} `
+      // );
       return quote.toString();
     } catch (error) {
       logger.error(`❌ Quote failed for ${network}: `, error);

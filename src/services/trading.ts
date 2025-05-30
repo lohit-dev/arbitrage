@@ -28,7 +28,6 @@ export class TradingService {
   private pendingTransactions: Set<string> = new Set();
   private discordNotifications: DiscordNotificationService;
 
-
   private previousBalances: { [key: string]: string } = {};
 
   constructor(networks: Map<string, NetworkRuntime>) {
@@ -317,7 +316,7 @@ export class TradingService {
           previousAmount?: string;
           usdValue?: string;
           change?: string;
-        }
+        };
       } = {};
 
       for (const [networkName, networkRuntime] of this.networks.entries()) {
@@ -332,7 +331,7 @@ export class TradingService {
           amount: `${ethAmount} ETH`,
           previousAmount: this.previousBalances[key],
           // You can add price feed here to get USD value
-          usdValue: await this.getUSDValue(ethAmount, 'ETH')
+          usdValue: await this.getUSDValue(ethAmount, "ETH"),
         };
         this.previousBalances[key] = balances[key].amount;
 
@@ -347,7 +346,9 @@ export class TradingService {
               networkWallet
             );
 
-            const balance = await tokenContract.balanceOf(networkWallet.address);
+            const balance = await tokenContract.balanceOf(
+              networkWallet.address
+            );
             const formattedBalance = ethers.utils.formatUnits(
               balance,
               token.decimals
@@ -357,10 +358,9 @@ export class TradingService {
             balances[key] = {
               amount: `${formattedBalance} ${symbol}`,
               previousAmount: this.previousBalances[key],
-              usdValue: await this.getUSDValue(formattedBalance, symbol)
+              usdValue: await this.getUSDValue(formattedBalance, symbol),
             };
             this.previousBalances[key] = balances[key].amount;
-
           } catch (error) {
             logger.error(
               `Error getting ${symbol} balance on ${networkName}:`,
@@ -384,9 +384,9 @@ export class TradingService {
     // TODO: Implement price feed integration (e.g. CoinGecko, Chainlink)
     // For now returning dummy values
     const dummyPrices: { [key: string]: number } = {
-      'ETH': 2000,
-      'WETH': 2000,
-      'SEED': 1
+      ETH: 2000,
+      WETH: 2000,
+      SEED: 1,
     };
 
     const price = dummyPrices[symbol] || 0;

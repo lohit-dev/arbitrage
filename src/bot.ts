@@ -12,7 +12,6 @@ class ArbitrageBot {
   public arbitrageService!: ArbitrageService;
   private isProcessingEvent: boolean = false;
   private lastTradeTimestamp: number = 0;
-  private readonly TRADE_COOLDOWN = 60000; // 1 minute cooldown
   private myWalletAddress: string = "";
 
   constructor() {
@@ -31,10 +30,14 @@ class ArbitrageBot {
 
       // Create services after networks are initialized
       this.arbitrageService = new ArbitrageService(networks);
-      this.eventListenerService = new EventListenerService(networks, poolConfigs);
+      this.eventListenerService = new EventListenerService(
+        networks,
+        poolConfigs
+      );
 
       // Get wallet address for filtering our own transactions
-      this.myWalletAddress = this.arbitrageService.tradingService.wallet.address;
+      this.myWalletAddress =
+        this.arbitrageService.tradingService.wallet.address;
       logger.info(`🔑 Bot wallet address: ${this.myWalletAddress}`);
 
       // Set up event handler
@@ -47,12 +50,14 @@ class ArbitrageBot {
 
       // Initial delay and check as requested
       logger.info("⏳ Waiting 2 seconds before initial arbitrage check...");
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise((resolve) => setTimeout(resolve, 2000));
 
       // Perform initial arbitrage check
       await this.performArbitrageCheck();
 
-      logger.info("🎯 Arbitrage Bot is now running and listening for opportunities...");
+      logger.info(
+        "🎯 Arbitrage Bot is now running and listening for opportunities..."
+      );
     } catch (error) {
       logger.error("❌ Failed to start Arbitrage Bot:", error);
       throw error;
@@ -62,12 +67,14 @@ class ArbitrageBot {
   private async handleSwapEvent(swapEvent: SwapEvent): Promise<void> {
     try {
       // Log the swap event details
-      logger.info(`🔄 Processing swap event from tx: ${swapEvent.transactionHash}`);
+      logger.info(
+        `🔄 Processing swap event from tx: ${swapEvent.transactionHash}`
+      );
       logger.info(`    Network: ${swapEvent.network}`);
       logger.info(`    Pool: ${swapEvent.poolAddress}`);
 
       // Wait for blockchain state to update
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      // await new Promise(resolve => setTimeout(resolve, 3000));
 
       // Perform new arbitrage check after swap
       await this.performArbitrageCheck();
@@ -83,8 +90,6 @@ class ArbitrageBot {
 
       logger.info("\n🔍 Performing arbitrage check...");
       logger.info("=".repeat(50));
-
-      const networks = this.networkService.getNetworks();
 
       // Get quotes from both networks
       const ethQuote = await this.arbitrageService.getQuote(
@@ -129,12 +134,15 @@ class ArbitrageBot {
       const minProfitThreshold = parseFloat(config.trading.minProfitThreshold);
 
       logger.info(
-        `Price difference: ${(profitPercentage * 100).toFixed(2)}% (threshold: ${(
-          minProfitThreshold * 100
-        ).toFixed(2)}%)`
+        `Price difference: ${(profitPercentage * 100).toFixed(
+          2
+        )}% (threshold: ${(minProfitThreshold * 100).toFixed(2)}%)`
       );
 
-      if (profitPercentage >= minProfitThreshold && config.trading.autoTradeEnabled) {
+      if (
+        profitPercentage >= minProfitThreshold &&
+        config.trading.autoTradeEnabled
+      ) {
         this.lastTradeTimestamp = now; // Update last trade timestamp
 
         const tradeAmount = ethers.utils.formatEther(
@@ -160,7 +168,9 @@ class ArbitrageBot {
         // The next check will happen when we receive the swap event from this trade
       } else {
         // No continuous polling - only check on swap events
-        logger.info("No profitable opportunity found. Waiting for next swap event...");
+        logger.info(
+          "No profitable opportunity found. Waiting for next swap event..."
+        );
       }
     } catch (error) {
       logger.error("❌ Arbitrage check failed:", error);
@@ -182,15 +192,18 @@ class ArbitrageBot {
       logger.info(`Expected profit: ${opportunity.profitEstimate} WETH`);
 
       // Execute trade and wait for transaction
-      const txHash = await this.arbitrageService.tradingService.executeArbitrage(
-        opportunity.buyNetwork,
-        opportunity.sellNetwork,
-        "SEED",
-        tradeAmount
-      );
+      const txHash =
+        await this.arbitrageService.tradingService.executeArbitrage(
+          opportunity.buyNetwork,
+          opportunity.sellNetwork,
+          "SEED",
+          tradeAmount
+        );
 
       logger.info(`✅ Trade executed! Tx: ${txHash}`);
-      logger.info("🔄 This trade will generate swap events that will trigger the next opportunity check...");
+      logger.info(
+        "🔄 This trade will generate swap events that will trigger the next opportunity check..."
+      );
     } catch (error) {
       logger.error("❌ Failed to execute arbitrage trade:", error);
       // On trade failure, continue checking for opportunities

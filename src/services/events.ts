@@ -81,9 +81,9 @@ export class EventListenerService {
             transactionHash: event.transactionHash,
           };
 
-          // logger.info(
-          //   `🔄 Swap detected on ${networkRuntime.config.name}: ${event.transactionHash}`
-          // );
+          logger.info(
+            `🔄 Swap detected on ${networkRuntime.config.name}: ${event.transactionHash}`
+          );
 
           if (this.swapEventCallback) {
             this.swapEventCallback(swapEvent);

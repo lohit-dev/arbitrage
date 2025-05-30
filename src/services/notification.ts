@@ -4,7 +4,12 @@ import { logger } from "../utils/logger";
 import { ArbitrageOpportunity } from "../types";
 
 export interface TradeNotification {
-  type: 'OPPORTUNITY' | 'TRADE_START' | 'TRADE_SUCCESS' | 'TRADE_FAILED' | 'BALANCE_UPDATE';
+  type:
+    | "OPPORTUNITY"
+    | "TRADE_START"
+    | "TRADE_SUCCESS"
+    | "TRADE_FAILED"
+    | "BALANCE_UPDATE";
   network?: string;
   tokenIn?: string;
   tokenOut?: string;
@@ -18,7 +23,7 @@ export interface TradeNotification {
       previousAmount?: string;
       usdValue?: string;
       change?: string;
-    }
+    };
   };
   gasUsed?: string;
   actualProfit?: string;
@@ -278,7 +283,7 @@ export class DiscordNotificationService {
 
       if (data.previousAmount) {
         const diff = parseFloat(data.amount) - parseFloat(data.previousAmount);
-        const sign = diff >= 0 ? '📈' : '📉';
+        const sign = diff >= 0 ? "📈" : "📉";
         value += `\nChange: ${sign} ${diff.toFixed(6)}`;
       }
 
