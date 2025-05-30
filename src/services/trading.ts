@@ -378,19 +378,210 @@ export class TradingService {
       logger.error("Error sending balance update:", error);
     }
   }
+  // TradingService.ts - Updated getUSDValue method and related functions
 
-  // Helper method to get USD value (you'll need to implement price feed integration)
   private async getUSDValue(amount: string, symbol: string): Promise<string> {
-    // TODO: Implement price feed integration (e.g. CoinGecko, Chainlink)
-    // For now returning dummy values
-    const dummyPrices: { [key: string]: number } = {
-      ETH: 2000,
-      WETH: 2000,
-      SEED: 1,
-    };
+    try {
+      // Skip if amount is 0 or very small
+      if (parseFloat(amount) < 0.000001) {
+        return "0.00";
+      }
 
-    const price = dummyPrices[symbol] || 0;
-    return (parseFloat(amount) * price).toFixed(2);
+      // Use ethereum network for USD price quotes (most liquid)
+      const networkRuntime = this.networks.get("ethereum");
+      if (!networkRuntime) {
+        logger.warn("Ethereum network not found for USD price lookup");
+        return "0.00";
+      }
+
+      const token = networkRuntime.tokens[symbol];
+      const seedToken = networkRuntime.tokens["SEED"]; // Assuming you have SEED configured
+
+      if (!token) {
+        logger.warn(`Token ${symbol} not found for USD price`);
+        return "0.00";
+      }
+
+      // For ETH/WETH, we can use a direct SEED quote
+      if (symbol === "ETH" || symbol === "WETH") {
+        if (!seedToken) {
+          logger.warn("SEED token not found for ETH price");
+          return "0.00";
+        }
+
+        // Convert ETH amount to wei
+        const rawAmount = ethers.utils.parseEther(amount);
+
+        // Get WETH/SEED quote with dynamic fee
+        const wethToken = networkRuntime.tokens["WETH"];
+        if (!wethToken) {
+          logger.warn("WETH token not found for price lookup");
+          return "0.00";
+        }
+
+        // Get the pool fee dynamically
+        const poolFee = await this.getPoolFee("ethereum", wethToken, seedToken);
+
+        const quote =
+          await networkRuntime.quoter.callStatic.quoteExactInputSingle(
+            wethToken.address,
+            seedToken.address,
+            poolFee, // Use dynamic fee instead of hardcoded 3000
+            rawAmount.toString(),
+            0 // sqrtPriceLimitX96: 0 to accept any price impact
+          );
+
+        // Format the quote (SEED has 6 decimals)
+        const usdValue = ethers.utils.formatUnits(quote, seedToken.decimals);
+        return parseFloat(usdValue).toFixed(2);
+      }
+
+      // For other tokens, try to get a quote against SEED or WETH
+      if (seedToken) {
+        try {
+          // Try direct token -> SEED quote first
+          const rawAmount = ethers.utils.parseUnits(amount, token.decimals);
+
+          // Get the pool fee dynamically
+          const poolFee = await this.getPoolFee("ethereum", token, seedToken);
+
+          const quote =
+            await networkRuntime.quoter.callStatic.quoteExactInputSingle(
+              token.address,
+              seedToken.address,
+              poolFee, // Use dynamic fee
+              rawAmount.toString(),
+              0
+            );
+
+          const usdValue = ethers.utils.formatUnits(quote, seedToken.decimals);
+          return parseFloat(usdValue).toFixed(2);
+        } catch (directError) {
+          logger.debug(`Direct ${symbol}/SEED quote failed, trying via WETH`);
+
+          // If direct quote fails, try token -> WETH -> SEED
+          const wethToken = networkRuntime.tokens["WETH"];
+          if (!wethToken || !seedToken) {
+            throw new Error(
+              "WETH or SEED token not found for indirect pricing"
+            );
+          }
+
+          // First get token -> WETH quote
+          const rawAmount = ethers.utils.parseUnits(amount, token.decimals);
+          const tokenWethFee = await this.getPoolFee(
+            "ethereum",
+            token,
+            wethToken
+          );
+
+          const wethQuote =
+            await networkRuntime.quoter.callStatic.quoteExactInputSingle(
+              token.address,
+              wethToken.address,
+              tokenWethFee, // Dynamic fee for token/WETH pair
+              rawAmount.toString(),
+              0
+            );
+
+          // Then get WETH -> SEED quote
+          const wethSeedFee = await this.getPoolFee(
+            "ethereum",
+            wethToken,
+            seedToken
+          );
+
+          const seedQuote =
+            await networkRuntime.quoter.callStatic.quoteExactInputSingle(
+              wethToken.address,
+              seedToken.address,
+              wethSeedFee, // Dynamic fee for WETH/SEED pair
+              wethQuote.toString(),
+              0
+            );
+
+          const usdValue = ethers.utils.formatUnits(
+            seedQuote,
+            seedToken.decimals
+          );
+          return parseFloat(usdValue).toFixed(2);
+        }
+      }
+
+      logger.warn(`Could not get USD price for ${symbol}, no SEED token found`);
+      return "0.00";
+    } catch (error) {
+      logger.error(`Failed to get USD price for ${symbol}:`, error);
+      return "0.00";
+    }
+  }
+
+  // Add this new method to get pool fee dynamically
+  private async getPoolFee(
+    network: string,
+    tokenA: Token,
+    tokenB: Token
+  ): Promise<number> {
+    const poolInfo = await this.getPoolInfo(network, tokenA, tokenB);
+    return poolInfo.fee;
+  }
+
+  // Update the existing getPoolInfo method to be more reusable
+  private async getPoolInfo(
+    network: string,
+    tokenA: Token,
+    tokenB: Token
+  ): Promise<{
+    fee: number;
+    liquidity: ethers.BigNumber;
+    sqrtPriceX96: ethers.BigNumber;
+    tick: number;
+  }> {
+    const networkRuntime = this.networks.get(network);
+    if (!networkRuntime) {
+      throw new Error(`Network ${network} not found`);
+    }
+
+    const pools = config.pools[network];
+    let poolAddress: string | undefined;
+
+    for (const pool of pools) {
+      const token0Symbol = pool.token0;
+      const token1Symbol = pool.token1;
+
+      if (
+        (tokenA.symbol === token0Symbol && tokenB.symbol === token1Symbol) ||
+        (tokenA.symbol === token1Symbol && tokenB.symbol === token0Symbol)
+      ) {
+        poolAddress = pool.address;
+        break;
+      }
+    }
+
+    if (!poolAddress) {
+      throw new Error(
+        `Pool not found for ${tokenA.symbol}/${tokenB.symbol} on ${network}`
+      );
+    }
+
+    const poolContract = new ethers.Contract(
+      poolAddress,
+      POOL_ABI,
+      networkRuntime.provider
+    );
+
+    const [fee, liquidity, slot0] = await Promise.all([
+      poolContract.fee(),
+      poolContract.liquidity(),
+      poolContract.slot0(),
+    ]);
+
+    return {
+      fee,
+      liquidity,
+      sqrtPriceX96: slot0[0],
+      tick: slot0[1],
+    };
   }
 
   async executeTrade(
@@ -552,63 +743,6 @@ export class TradingService {
 
       throw error;
     }
-  }
-
-  private async getPoolInfo(
-    network: string,
-    tokenA: Token,
-    tokenB: Token
-  ): Promise<{
-    fee: number;
-    liquidity: ethers.BigNumber;
-    sqrtPriceX96: ethers.BigNumber;
-    tick: number;
-  }> {
-    const networkRuntime = this.networks.get(network);
-    if (!networkRuntime) {
-      throw new Error(`Network ${network} not found`);
-    }
-
-    const pools = config.pools[network];
-    let poolAddress: string | undefined;
-
-    for (const pool of pools) {
-      const token0Symbol = pool.token0;
-      const token1Symbol = pool.token1;
-
-      if (
-        (tokenA.symbol === token0Symbol && tokenB.symbol === token1Symbol) ||
-        (tokenA.symbol === token1Symbol && tokenB.symbol === token0Symbol)
-      ) {
-        poolAddress = pool.address;
-        break;
-      }
-    }
-
-    if (!poolAddress) {
-      throw new Error(
-        `Pool not found for ${tokenA.symbol}/${tokenB.symbol} on ${network}`
-      );
-    }
-
-    const poolContract = new ethers.Contract(
-      poolAddress,
-      POOL_ABI,
-      networkRuntime.provider
-    );
-
-    const [fee, liquidity, slot0] = await Promise.all([
-      poolContract.fee(),
-      poolContract.liquidity(),
-      poolContract.slot0(),
-    ]);
-
-    return {
-      fee,
-      liquidity,
-      sqrtPriceX96: slot0[0],
-      tick: slot0[1],
-    };
   }
 
   private async getOutputQuote(
