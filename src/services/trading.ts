@@ -17,7 +17,6 @@ import { DiscordNotificationService } from "./notification";
 // Uniswap V3 SwapRouter address is the same on both Ethereum and Arbitrum
 const SWAP_ROUTER_ADDRESS = "0xE592427A0AEce92De3Edee1F18E0157C05861564";
 
-// Fixed gas settings - these were way too high in your config
 const MAX_FEE_PER_GAS = ethers.utils.parseUnits("50", "gwei");
 const MAX_PRIORITY_FEE_PER_GAS = ethers.utils.parseUnits("2", "gwei");
 
@@ -227,7 +226,6 @@ export class TradingService {
       await this.checkWalletBalances(buyNetwork);
       await this.checkWalletBalances(sellNetwork);
 
-      // Send trade start notification
       await this.discordNotifications.sendTradeNotification({
         type: "TRADE_START",
         network: buyNetwork,
@@ -322,7 +320,6 @@ export class TradingService {
       for (const [networkName, networkRuntime] of this.networks.entries()) {
         const networkWallet = this.wallet.connect(networkRuntime.provider);
 
-        // Get ETH balance
         const ethBalance = await networkWallet.getBalance();
         const ethAmount = ethers.utils.formatEther(ethBalance);
         const key = `${networkName.toUpperCase()} ETH`;
@@ -330,7 +327,6 @@ export class TradingService {
         balances[key] = {
           amount: `${ethAmount} ETH`,
           previousAmount: this.previousBalances[key],
-          // You can add price feed here to get USD value
           usdValue: await this.getUSDValue(ethAmount, "ETH"),
         };
         this.previousBalances[key] = balances[key].amount;
@@ -378,7 +374,6 @@ export class TradingService {
       logger.error("Error sending balance update:", error);
     }
   }
-  // TradingService.ts - Updated getUSDValue method and related functions
 
   private async getUSDValue(amount: string, symbol: string): Promise<string> {
     try {
@@ -395,7 +390,7 @@ export class TradingService {
       }
 
       const token = networkRuntime.tokens[symbol];
-      const seedToken = networkRuntime.tokens["SEED"]; // Assuming you have SEED configured
+      const seedToken = networkRuntime.tokens["SEED"];
 
       if (!token) {
         logger.warn(`Token ${symbol} not found for USD price`);
@@ -426,7 +421,7 @@ export class TradingService {
           await networkRuntime.quoter.callStatic.quoteExactInputSingle(
             wethToken.address,
             seedToken.address,
-            poolFee, // Use dynamic fee instead of hardcoded 3000
+            poolFee,
             rawAmount.toString(),
             0 // sqrtPriceLimitX96: 0 to accept any price impact
           );
@@ -441,15 +436,12 @@ export class TradingService {
         try {
           // Try direct token -> SEED quote first
           const rawAmount = ethers.utils.parseUnits(amount, token.decimals);
-
-          // Get the pool fee dynamically
           const poolFee = await this.getPoolFee("ethereum", token, seedToken);
-
           const quote =
             await networkRuntime.quoter.callStatic.quoteExactInputSingle(
               token.address,
               seedToken.address,
-              poolFee, // Use dynamic fee
+              poolFee,
               rawAmount.toString(),
               0
             );
@@ -479,7 +471,7 @@ export class TradingService {
             await networkRuntime.quoter.callStatic.quoteExactInputSingle(
               token.address,
               wethToken.address,
-              tokenWethFee, // Dynamic fee for token/WETH pair
+              tokenWethFee,
               rawAmount.toString(),
               0
             );
@@ -495,7 +487,7 @@ export class TradingService {
             await networkRuntime.quoter.callStatic.quoteExactInputSingle(
               wethToken.address,
               seedToken.address,
-              wethSeedFee, // Dynamic fee for WETH/SEED pair
+              wethSeedFee,
               wethQuote.toString(),
               0
             );
@@ -516,7 +508,6 @@ export class TradingService {
     }
   }
 
-  // Add this new method to get pool fee dynamically
   private async getPoolFee(
     network: string,
     tokenA: Token,
@@ -526,7 +517,6 @@ export class TradingService {
     return poolInfo.fee;
   }
 
-  // Update the existing getPoolInfo method to be more reusable
   private async getPoolInfo(
     network: string,
     tokenA: Token,
@@ -697,8 +687,8 @@ export class TradingService {
       slippageTolerance: new Percent(
         Math.floor(slippageTolerance * 10000),
         10000
-      ), // Convert to basis points
-      deadline: Math.floor(Date.now() / 1000) + 60 * 20, // 20 minutes
+      ), // not sure what this is, but 0.5% slippage
+      deadline: Math.floor(Date.now() / 1000) + 60 * 20, // deadline
       recipient: networkWallet.address,
     };
 

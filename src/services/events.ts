@@ -127,7 +127,7 @@ export class EventListenerService {
   stop(): void {
     logger.info("🛑 Stopping all event listeners...");
 
-    for (const [networkKey, networkRuntime] of this.networks) {
+    for (const [_networkKey, networkRuntime] of this.networks) {
       networkRuntime.provider.removeAllListeners();
     }
 

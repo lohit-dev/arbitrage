@@ -3,7 +3,6 @@ import { abi as IUniswapV3PoolABI } from "@uniswap/v3-core/artifacts/contracts/i
 import config from "../config.json";
 import { logger } from "../src/utils/logger";
 
-// TypeScript interfaces
 interface TokenConfig {
   address: string;
   decimals: number;
@@ -26,14 +25,12 @@ interface NetworkConfig {
   gasLimit: number;
 }
 
-// Helper function to format pool data
 async function getPoolInfo(
   pool: ethers.Contract,
   poolConfig: PoolConfig,
   tokens: NetworkTokens,
   provider: ethers.providers.JsonRpcProvider
 ): Promise<void> {
-  // Verify pool exists
   const code = await provider.getCode(poolConfig.address);
   if (code === "0x") {
     throw new Error(
@@ -41,7 +38,6 @@ async function getPoolInfo(
     );
   }
 
-  // Get pool data
   const [token0, token1, fee, tickSpacing, liquidity, slot0] =
     await Promise.all([
       pool.token0(),
@@ -52,7 +48,6 @@ async function getPoolInfo(
       pool.slot0(),
     ]);
 
-  // Get expected token addresses
   const configToken0Address = tokens[poolConfig.token0].address;
   const configToken1Address = tokens[poolConfig.token1].address;
 
@@ -69,7 +64,6 @@ async function getPoolInfo(
   logger.info(`Current Tick: ${slot0[1]}`);
   logger.info(`Current Sqrt Price: ${slot0[0].toString()}`);
 
-  // Verify token addresses (handle both possible orders)
   const token0Lower = token0.toLowerCase();
   const token1Lower = token1.toLowerCase();
   const configToken0Lower = configToken0Address.toLowerCase();
@@ -80,7 +74,6 @@ async function getPoolInfo(
   let actualToken0Symbol: string;
   let actualToken1Symbol: string;
 
-  // Determine actual token order
   if (token0Lower === configToken0Lower && token1Lower === configToken1Lower) {
     // Config order matches actual order
     baseToken = poolConfig.token0;
@@ -111,7 +104,6 @@ async function getPoolInfo(
     return;
   }
 
-  // Calculate price
   const decimalsBase = tokens[baseToken].decimals;
   const decimalsQuote = tokens[quoteToken].decimals;
 
@@ -129,7 +121,6 @@ async function getPoolInfo(
     `Current Price: 1 ${baseToken} = ${price.toFixed(8)} ${quoteToken}`
   );
 
-  // Check liquidity
   if (liquidity.isZero()) {
     logger.warn("⚠️  WARNING: Pool has no liquidity!");
   } else {
@@ -142,13 +133,12 @@ async function getPoolInfo(
 async function testUniswap(): Promise<void> {
   logger.info("🚀 Testing Uniswap WETH/SEED pools on forked networks...\n");
 
-  // Test Ethereum Mainnet Fork
   try {
     logger.info("ETHEREUM ANALYSIS");
     logger.info("=".repeat(50));
 
     const ethProvider = new ethers.providers.JsonRpcProvider(
-      "http://127.0.0.1:8546"
+      "http://127.0.0.1:8545"
     );
 
     const blockNumber = await ethProvider.getBlockNumber();

@@ -148,7 +148,7 @@ export class DiscordNotificationService {
   ): EmbedBuilder {
     return embed
       .setTitle("🤖 ARBITRAGE TRADE STARTED")
-      .setColor(0x0099ff) // Blue
+      .setColor(0x0099ff) // Blue, for no extension candidates
       .addFields(
         {
           name: "🌐 Network",
@@ -219,7 +219,7 @@ export class DiscordNotificationService {
 
     return embed
       .setTitle("✅ TRADE SUCCESSFUL")
-      .setColor(0x00ff00) // Green
+      .setColor(0x00ff00) // Green, for those who didn't install any extension
       .addFields(fields)
       .setFooter({ text: `Completed at ${timestamp}` })
       .setTimestamp();
@@ -266,7 +266,7 @@ export class DiscordNotificationService {
 
     return embed
       .setTitle("❌ TRADE FAILED")
-      .setColor(0xff0000) // Red
+      .setColor(0xff0000) // Red, for github reviewers
       .addFields(fields)
       .setFooter({ text: `Failed at ${timestamp}` })
       .setTimestamp();
@@ -310,14 +310,12 @@ export class DiscordNotificationService {
     const explorers: { [key: string]: string } = {
       ethereum: "https://etherscan.io/tx/",
       arbitrum: "https://arbiscan.io/tx/",
-      polygon: "https://polygonscan.com/tx/",
-      bsc: "https://bscscan.com/tx/",
     };
 
     return `${explorers[network] || explorers.ethereum}${txHash}`;
   }
 
-  // Utility method to send custom messages
+  // Just in case most probably will not use this
   async sendCustomMessage(
     title: string,
     description: string,

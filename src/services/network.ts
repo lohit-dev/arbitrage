@@ -17,11 +17,11 @@ export class NetworkService {
           networkRpcUrls[networkKey]
         );
 
-        // Test the connection to the provider
-        await provider.getBlockNumber();
+        // Test test
+        // await provider.getBlockNumber();
 
         const quoter = new ethers.Contract(
-          QUOTER_ADDRESS, // Use the hardcoded address instead of QUOTER_ADDRESSES
+          QUOTER_ADDRESS, // see docs
           QUOTER_V2_ABI,
           provider
         );

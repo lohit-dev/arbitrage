@@ -3,10 +3,11 @@ import * as path from "path";
 import { config as dotenvConfig } from "dotenv";
 import { Config } from "./types";
 
-// Load environment variables from .env.local first, then fall back to .env
+// from local first,
 dotenvConfig({ path: path.resolve(process.cwd(), ".env.local") });
 dotenvConfig(); // This will load from .env as a fallback
 
+// same config but just for testing
 const configPath = path.join(__dirname, "..", "config.test.json");
 const configFile = fs.readFileSync(configPath, "utf8");
 export const config: Config = JSON.parse(configFile);

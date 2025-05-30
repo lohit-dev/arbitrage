@@ -2,12 +2,10 @@ import { ethers } from "ethers";
 
 async function main() {
   try {
-    // Connect to your Arbitrum fork
     const provider = new ethers.providers.JsonRpcProvider(
       "http://localhost:8546"
     );
 
-    // Use the test account from your memory
     const privateKey =
       "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
     const wallet = new ethers.Wallet(privateKey, provider);
@@ -17,7 +15,6 @@ async function main() {
     const balance = await provider.getBalance(walletAddress);
     console.log(`Wallet ETH balance: ${ethers.utils.formatEther(balance)} ETH`);
 
-    // WETH contract on Arbitrum
     const wethAddress = "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1";
     const wethContract = new ethers.Contract(
       wethAddress,

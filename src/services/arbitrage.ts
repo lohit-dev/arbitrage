@@ -12,7 +12,9 @@ import { SIMPLE_POOL_ABI, POOL_ABI } from "../contracts/abis";
 import { TradingService } from "./trading";
 import { DiscordNotificationService } from "./notification";
 import { discordConfig } from "../config";
+import { Token } from "@uniswap/sdk-core";
 
+// ArbitrageService handles the core logic for detecting and executing arbitrage opportunities
 export class ArbitrageService {
   private networks: Map<string, NetworkRuntime> = new Map();
   private poolStates: Map<string, PoolState> = new Map();
@@ -25,7 +27,7 @@ export class ArbitrageService {
   // Cache quotes to reduce RPC calls
   private priceCache: Map<string, { price: number; timestamp: number }> =
     new Map();
-  private readonly CACHE_DURATION = 5000; // 5 seconds cache
+  private readonly CACHE_DURATION = 3 * 1000;
 
   constructor(networks: Map<string, NetworkRuntime>) {
     this.networks = networks;
@@ -35,7 +37,6 @@ export class ArbitrageService {
     );
   }
 
-  // ✅ NEW: Initialize all pool states on startup
   async initializePoolStates(): Promise<void> {
     logger.info("🔄 Initializing pool states for all networks...");
 
@@ -106,7 +107,7 @@ export class ArbitrageService {
         lastUpdated: Date.now(),
       };
 
-      // Store the pool state
+      // Store the pool state, just a hashmap bro
       this.poolStates.set(poolKey, poolState);
 
       const price = this.calculatePriceFromSqrtPrice(sqrtPriceX96.toString());
@@ -123,13 +124,12 @@ export class ArbitrageService {
   }
 
   async handleSwapEvent(swapEvent: SwapEvent): Promise<void> {
-    // If we're currently trading, skip this event
-    if (this.isTrading) {
-      logger.debug("Trade in progress, skipping swap event processing...");
-      return;
-    }
+    // If we're currently trading, skip this event left it here just in case
+    // if (this.isTrading) {
+    //   logger.debug("Trade in progress, skipping swap event processing...");
+    //   return;
+    // }
 
-    // Check cooldown
     if (Date.now() - this.lastTradeTimestamp < this.COOLDOWN_PERIOD) {
       logger.debug("In cooldown period, skipping opportunity check");
       return;
@@ -172,7 +172,6 @@ export class ArbitrageService {
     }
 
     try {
-      // Update the existing pool state with new swap data
       const updatedPoolState: PoolState = {
         ...existingState,
         sqrtPriceX96: swapEvent.sqrtPriceX96,
@@ -181,7 +180,6 @@ export class ArbitrageService {
         lastUpdated: Date.now(),
       };
 
-      // Update pool state
       this.poolStates.set(poolKey, updatedPoolState);
 
       const price = this.calculatePriceFromSqrtPrice(swapEvent.sqrtPriceX96);
@@ -194,7 +192,6 @@ export class ArbitrageService {
   }
 
   async checkArbitrageOpportunity(): Promise<ArbitrageOpportunity | null> {
-    // Build pool keys dynamically from config
     const ethereumPools = config.pools.ethereum || [];
     const arbitrumPools = config.pools.arbitrum || [];
 
@@ -209,7 +206,6 @@ export class ArbitrageService {
     const ethereumPool = this.poolStates.get(ethereumPoolKey);
     const arbitrumPool = this.poolStates.get(arbitrumPoolKey);
 
-    // Add detailed logging
     logger.info(`📊 Pool State Check:`);
     logger.info(
       `  - Ethereum pool (${ethereumPoolKey}): ${
@@ -326,6 +322,9 @@ export class ArbitrageService {
     };
   }
 
+  // This is not a scam, this is is the actual price calculation
+  // This is the correct formula to calculate price from sqrtPriceX96
+  // Price = (sqrtPriceX96 / 2^96) ^ 2
   private calculatePriceFromSqrtPrice(sqrtPriceX96: string): number {
     const sqrtPrice = parseFloat(sqrtPriceX96);
     const price = Math.pow(sqrtPrice / Math.pow(2, 96), 2);
@@ -338,114 +337,213 @@ export class ArbitrageService {
     return buyGas + sellGas;
   }
 
-  async handleArbitrageOpportunity(opportunity: ArbitrageOpportunity): Promise<void> {
-      try {
-          this.isTrading = true;
-
-          logger.info("🚨 ARBITRAGE OPPORTUNITY DETECTED!");
-          logger.info(
-            `💰 Buy on ${opportunity.buyNetwork} at ${parseFloat(
-              opportunity.buyPrice
-            ).toFixed(8)} WETH`
-          );
-          logger.info(
-            `💰 Sell on ${opportunity.sellNetwork} at ${parseFloat(
-              opportunity.sellPrice
-            ).toFixed(8)} WETH`
-          );
-          logger.info(
-            `📈 Estimated profit: ${parseFloat(opportunity.profitEstimate).toFixed(
-              6
-            )} WETH`
-          );
-          logger.info(
-            `⛽ Gas estimate: ${opportunity.gasEstimate.toLocaleString()} units`
-          );
-
-          await this.discordNotifications.sendTradeNotification({
-            type: "OPPORTUNITY",
-            opportunity: opportunity,
-          });
-
-          if (config.trading.autoTradeEnabled) {
-            try {
-              logger.info(
-                "🤖 Auto-trading is enabled. Executing arbitrage trade..."
-              );
-
-              const tradeAmount = ethers.utils.formatEther(
-                config.trading.defaultTradeAmount
-              );
-
-              const txHash = await this.tradingService.executeArbitrage(
-                opportunity.buyNetwork,
-                opportunity.sellNetwork,
-                "SEED",
-                tradeAmount
-              );
-
-              logger.info(
-                `✅ Arbitrage trade completed successfully! Tx: ${txHash}`
-              );
-              logger.info(`💰 Expected profit: ${opportunity.profitEstimate} WETH`);
-
-              // Update timestamp after successful trade
-              this.lastTradeTimestamp = Date.now();
-            } catch (error) {
-              logger.error("❌ Failed to execute arbitrage trade:", error);
-            }
-          } else {
-            logger.info("🛑 Auto-trading is disabled. Skipping trade execution.");
-          }
-        } finally {
-          this.isTrading = false;
-          this.lastTradeTimestamp = Date.now(); // Update timestamp after trade
-        }
-    }
-
-  // ✅ NEW: Get real USD price using Uniswap quoter instead of dummy values
-  async getUSDPrice(tokenSymbol: string, amount: string): Promise<string> {
+  async handleArbitrageOpportunity(
+    opportunity: ArbitrageOpportunity
+  ): Promise<void> {
     try {
-      // Use the first available network (usually ethereum) for price quotes
-      const primaryNetwork = "ethereum";
-      const networkRuntime = this.networks.get(primaryNetwork);
+      this.isTrading = true;
 
+      logger.info("🚨 ARBITRAGE OPPORTUNITY DETECTED!");
+      logger.info(
+        `💰 Buy on ${opportunity.buyNetwork} at ${parseFloat(
+          opportunity.buyPrice
+        ).toFixed(8)} WETH`
+      );
+      logger.info(
+        `💰 Sell on ${opportunity.sellNetwork} at ${parseFloat(
+          opportunity.sellPrice
+        ).toFixed(8)} WETH`
+      );
+      logger.info(
+        `📈 Estimated profit: ${parseFloat(opportunity.profitEstimate).toFixed(
+          6
+        )} WETH`
+      );
+      logger.info(
+        `⛽ Gas estimate: ${opportunity.gasEstimate.toLocaleString()} units`
+      );
+
+      await this.discordNotifications.sendTradeNotification({
+        type: "OPPORTUNITY",
+        opportunity: opportunity,
+      });
+
+      if (config.trading.autoTradeEnabled) {
+        try {
+          logger.info(
+            "🤖 Auto-trading is enabled. Executing arbitrage trade..."
+          );
+
+          const tradeAmount = ethers.utils.formatEther(
+            config.trading.defaultTradeAmount
+          );
+
+          const txHash = await this.tradingService.executeArbitrage(
+            opportunity.buyNetwork,
+            opportunity.sellNetwork,
+            "SEED",
+            tradeAmount
+          );
+
+          logger.info(
+            `✅ Arbitrage trade completed successfully! Tx: ${txHash}`
+          );
+          logger.info(`💰 Expected profit: ${opportunity.profitEstimate} WETH`);
+
+          this.lastTradeTimestamp = Date.now();
+        } catch (error) {
+          logger.error("❌ Failed to execute arbitrage trade:", error);
+        }
+      } else {
+        logger.info("🛑 Auto-trading is disabled. Skipping trade execution.");
+      }
+    } finally {
+      this.isTrading = false;
+      this.lastTradeTimestamp = Date.now(); // Update timestamp after trade
+    }
+  }
+
+  // USD price from quoter
+  private async getUSDValue(amount: string, symbol: string): Promise<string> {
+    try {
+      // Skip if amount is 0 or very small
+      if (parseFloat(amount) < 0.000001) {
+        return "0.00";
+      }
+
+      const networkRuntime = this.networks.get("ethereum");
       if (!networkRuntime) {
-        logger.warn(`Network ${primaryNetwork} not found for USD price lookup`);
+        logger.warn("Ethereum network not found for USD price lookup");
         return "0.00";
       }
 
-      const token = networkRuntime.tokens[tokenSymbol];
-      const usdcToken = networkRuntime.tokens["USDC"]; // Assuming you have USDC configured
+      const token = networkRuntime.tokens[symbol];
+      const seedToken = networkRuntime.tokens["SEED"];
 
-      if (!token || !usdcToken) {
-        logger.warn(`Token ${tokenSymbol} or USDC not found for USD price`);
+      if (!token) {
+        logger.warn(`Token ${symbol} not found for USD price`);
         return "0.00";
       }
 
-      // Convert amount to raw amount with token decimals
-      const rawAmount = ethers.utils.parseUnits(amount, token.decimals);
+      // For ETH/WETH, we can use a direct SEED quote
+      if (symbol === "ETH" || symbol === "WETH") {
+        if (!seedToken) {
+          logger.warn("SEED token not found for ETH price");
+          return "0.00";
+        }
 
-      // Get quote from quoter contract
-      const quote =
-        await networkRuntime.quoter.callStatic.quoteExactInputSingle(
-          token.address,
-          usdcToken.address,
-          3000, // 0.3% fee tier
-          rawAmount.toString(),
-          0 // sqrtPriceLimitX96: 0 to accept any price impact
-        );
+        // Convert ETH amount to wei
+        const rawAmount = ethers.utils.parseEther(amount);
 
-      // Format the quote (USDC has 6 decimals)
-      const usdValue = ethers.utils.formatUnits(quote, usdcToken.decimals);
-      return parseFloat(usdValue).toFixed(2);
+        // Get WETH/SEED quote with dynamic fee
+        const wethToken = networkRuntime.tokens["WETH"];
+        if (!wethToken) {
+          logger.warn("WETH token not found for price lookup");
+          return "0.00";
+        }
+
+        const poolFee = await this.getPoolFee("ethereum", wethToken, seedToken);
+
+        const quote =
+          await networkRuntime.quoter.callStatic.quoteExactInputSingle(
+            wethToken.address,
+            seedToken.address,
+            poolFee,
+            rawAmount.toString(),
+            0 // sqrtPriceLimitX96: 0 to accept any price impact
+          );
+
+        const usdValue = ethers.utils.formatUnits(quote, seedToken.decimals);
+        return parseFloat(usdValue).toFixed(2);
+      }
+
+      // For other tokens, try to get a quote against SEED or WETH
+      if (seedToken) {
+        try {
+          // Try direct token -> SEED quote first
+          const rawAmount = ethers.utils.parseUnits(amount, token.decimals);
+          const poolFee = await this.getPoolFee("ethereum", token, seedToken);
+
+          const quote =
+            await networkRuntime.quoter.callStatic.quoteExactInputSingle(
+              token.address,
+              seedToken.address,
+              poolFee,
+              rawAmount.toString(),
+              0
+            );
+
+          const usdValue = ethers.utils.formatUnits(quote, seedToken.decimals);
+          return parseFloat(usdValue).toFixed(2);
+        } catch (directError) {
+          logger.debug(`Direct ${symbol}/SEED quote failed, trying via WETH`);
+
+          // If direct quote fails, try token -> WETH -> SEED
+          const wethToken = networkRuntime.tokens["WETH"];
+          if (!wethToken || !seedToken) {
+            throw new Error(
+              "WETH or SEED token not found for indirect pricing"
+            );
+          }
+
+          // First get token -> WETH quote
+          const rawAmount = ethers.utils.parseUnits(amount, token.decimals);
+          const tokenWethFee = await this.getPoolFee(
+            "ethereum",
+            token,
+            wethToken
+          );
+
+          const wethQuote =
+            await networkRuntime.quoter.callStatic.quoteExactInputSingle(
+              token.address,
+              wethToken.address,
+              tokenWethFee,
+              rawAmount.toString(),
+              0
+            );
+
+          // Then get WETH -> SEED quote
+          const wethSeedFee = await this.getPoolFee(
+            "ethereum",
+            wethToken,
+            seedToken
+          );
+
+          const seedQuote =
+            await networkRuntime.quoter.callStatic.quoteExactInputSingle(
+              wethToken.address,
+              seedToken.address,
+              wethSeedFee,
+              wethQuote.toString(),
+              0 // sqrtPriceLimitX96: 0 to accept any price impact
+            );
+
+          const usdValue = ethers.utils.formatUnits(
+            seedQuote,
+            seedToken.decimals
+          );
+          return parseFloat(usdValue).toFixed(2);
+        }
+      }
+
+      logger.warn(`Could not get USD price for ${symbol}, no SEED token found`);
+      return "0.00";
     } catch (error) {
-      logger.error(`Failed to get USD price for ${tokenSymbol}:`, error);
+      logger.error(`Failed to get USD price for ${symbol}:`, error);
       return "0.00";
     }
   }
 
-  // Cached version to reduce RPC calls
+  private async getPoolFee(
+    network: string,
+    tokenA: Token,
+    tokenB: Token
+  ): Promise<number> {
+    const poolInfo = await this.getPoolInfo(network);
+    return poolInfo.fee;
+  }
+
   async getQuote(
     network: string,
     tokenIn: string,
@@ -486,7 +584,6 @@ export class ArbitrageService {
           0 // sqrtPriceLimitX96: 0 to accept any price impact
         );
 
-      // Cache the result
       this.priceCache.set(cacheKey, {
         price: parseFloat(quote),
         timestamp: Date.now(),
