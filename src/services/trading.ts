@@ -382,51 +382,50 @@ export class TradingService {
         return "0.00";
       }
 
-      // Use ethereum network for USD price quotes (most liquid)
+      // Use ethereum network for USD price quotes
       const networkRuntime = this.networks.get("ethereum");
       if (!networkRuntime) {
         logger.warn("Ethereum network not found for USD price lookup");
         return "0.00";
       }
 
-      const token = networkRuntime.tokens[symbol];
+      // Convert ETH to WETH for price lookup
+      const lookupSymbol = symbol === "ETH" ? "WETH" : symbol;
+      const token = networkRuntime.tokens[lookupSymbol];
       const seedToken = networkRuntime.tokens["SEED"];
 
       if (!token) {
-        logger.warn(`Token ${symbol} not found for USD price`);
+        logger.warn(`Token ${lookupSymbol} not found for USD price`);
         return "0.00";
       }
 
-      // For ETH/WETH, we can use a direct SEED quote
+      // For ETH/WETH, use direct SEED quote
       if (symbol === "ETH" || symbol === "WETH") {
         if (!seedToken) {
-          logger.warn("SEED token not found for ETH price");
+          logger.warn("SEED token not found for ETH/WETH price");
           return "0.00";
         }
 
-        // Convert ETH amount to wei
+        // Convert amount to wei
         const rawAmount = ethers.utils.parseEther(amount);
-
-        // Get WETH/SEED quote with dynamic fee
         const wethToken = networkRuntime.tokens["WETH"];
+
         if (!wethToken) {
           logger.warn("WETH token not found for price lookup");
           return "0.00";
         }
 
-        // Get the pool fee dynamically
+        // Get the pool fee and quote
         const poolFee = await this.getPoolFee("ethereum", wethToken, seedToken);
-
         const quote =
           await networkRuntime.quoter.callStatic.quoteExactInputSingle(
             wethToken.address,
             seedToken.address,
             poolFee,
             rawAmount.toString(),
-            0 // sqrtPriceLimitX96: 0 to accept any price impact
+            0
           );
 
-        // Format the quote (SEED has 6 decimals)
         const usdValue = ethers.utils.formatUnits(quote, seedToken.decimals);
         return parseFloat(usdValue).toFixed(2);
       }

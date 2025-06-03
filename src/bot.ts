@@ -36,14 +36,14 @@ class ArbitrageBot {
       const networks = this.networkService.getNetworks();
       const poolConfigs = this.networkService.getPoolConfigs();
 
-      // Create services after networks are initialized very important!
+      // Create services after networks are initialized
       this.arbitrageService = new ArbitrageService(networks);
       this.eventListenerService = new EventListenerService(
         networks,
         poolConfigs
       );
 
-      // Just for logging bot address
+      // Log bot address
       this.myWalletAddress =
         this.arbitrageService.tradingService.wallet.address;
       logger.info(`🔑 Bot wallet address: ${this.myWalletAddress}`);
@@ -52,6 +52,23 @@ class ArbitrageBot {
       await this.arbitrageService.initializePoolStates();
       logger.info("✅ Pool states initialized successfully");
 
+      // First check for arbitrage opportunities before setting up event listeners
+      logger.info("🔍 Performing initial arbitrage check...");
+      const initialOpportunity =
+        await this.arbitrageService.checkArbitrageOpportunity();
+
+      if (initialOpportunity) {
+        logger.info("🎯 Initial arbitrage opportunity found!");
+        if (config.trading.autoTradeEnabled) {
+          logger.info(
+            "⏳ Waiting for event listeners before executing trades..."
+          );
+        }
+      } else {
+        logger.info("✅ No initial arbitrage opportunities found");
+      }
+
+      // Now set up event listeners
       this.eventListenerService.setSwapEventCallback(async (swapEvent) => {
         await this.arbitrageService.handleSwapEvent(swapEvent);
       });
@@ -59,11 +76,15 @@ class ArbitrageBot {
       await this.eventListenerService.startListening();
       logger.info("✅ Event listeners started");
 
-      logger.info("⏳ Waiting 2 seconds before initial arbitrage check...");
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-
-      // initial check
-      await this.performInitialArbitrageCheck();
+      // Only now consider executing trades if opportunity exists
+      if (initialOpportunity && config.trading.autoTradeEnabled) {
+        logger.info(
+          "🤖 Auto-trading enabled, executing initial opportunity..."
+        );
+        await this.arbitrageService.handleArbitrageOpportunity(
+          initialOpportunity
+        );
+      }
 
       logger.info(
         "🎯 Arbitrage Bot is now running and listening for opportunities..."

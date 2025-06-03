@@ -22,12 +22,16 @@ export class ArbitrageService {
   public discordNotifications: DiscordNotificationService;
   private isTrading: boolean = false;
   private lastTradeTimestamp: number = 0;
-  private readonly COOLDOWN_PERIOD = 60000; // 1 minute cooldown
+  private readonly COOLDOWN_PERIOD = 0;
 
   // Cache quotes to reduce RPC calls
   private priceCache: Map<string, { price: number; timestamp: number }> =
     new Map();
   private readonly CACHE_DURATION = 3 * 1000;
+
+  // Add these properties to the ArbitrageService class
+  private readonly EVENT_QUEUE: SwapEvent[] = [];
+  private isProcessingQueue: boolean = false;
 
   constructor(networks: Map<string, NetworkRuntime>) {
     this.networks = networks;
@@ -124,38 +128,45 @@ export class ArbitrageService {
   }
 
   async handleSwapEvent(swapEvent: SwapEvent): Promise<void> {
-    // If we're currently trading, skip this event left it here just in case
-    // if (this.isTrading) {
-    //   logger.debug("Trade in progress, skipping swap event processing...");
-    //   return;
-    // }
+    // Add the event to the queue
+    this.EVENT_QUEUE.push(swapEvent);
 
-    if (Date.now() - this.lastTradeTimestamp < this.COOLDOWN_PERIOD) {
-      logger.debug("In cooldown period, skipping opportunity check");
-      return;
+    // If we're not already processing events, start processing
+    if (!this.isProcessingQueue) {
+      await this.processEventQueue();
     }
+  }
+
+  private async processEventQueue(): Promise<void> {
+    if (this.isProcessingQueue) return;
 
     try {
-      this.isTrading = true;
-      await this.updatePoolState(swapEvent);
+      this.isProcessingQueue = true;
 
-      logger.info(
-        "🔍 Checking for arbitrage opportunity after pool state update..."
-      );
-      const opportunity = await this.checkArbitrageOpportunity();
+      while (this.EVENT_QUEUE.length > 0) {
+        const event = this.EVENT_QUEUE.shift()!;
 
-      if (opportunity) {
-        logger.info("🎯 New arbitrage opportunity found after swap event!");
-        await this.handleArbitrageOpportunity(opportunity);
-      } else {
-        logger.debug(
-          "No profitable arbitrage opportunity found after this swap"
-        );
+        try {
+          // Update pool state
+          await this.updatePoolState(event);
+
+          // Check for arbitrage opportunity
+          logger.info(
+            "🔍 Checking for arbitrage opportunity after pool state update..."
+          );
+          const opportunity = await this.checkArbitrageOpportunity();
+
+          if (opportunity) {
+            logger.info("🎯 New arbitrage opportunity found after swap event!");
+            await this.handleArbitrageOpportunity(opportunity);
+          }
+        } catch (error) {
+          logger.error(`Error processing swap event: ${error}`);
+          // Continue processing other events even if one fails
+        }
       }
-    } catch (error) {
-      logger.error("Error processing swap event:", error);
     } finally {
-      this.isTrading = false;
+      this.isProcessingQueue = false;
     }
   }
 
