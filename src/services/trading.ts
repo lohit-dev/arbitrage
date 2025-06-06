@@ -209,7 +209,10 @@ export class TradingService {
     tokenSymbol: string,
     amount: string
   ): Promise<string> {
-    const tradeKey = `${buyNetwork}-${sellNetwork}-${tokenSymbol}-${amount}`;
+    // const tradeKey = `${buyNetwork}-${sellNetwork}-${tokenSymbol}-${amount}`;
+    const tradeKey = `${buyNetwork}-${sellNetwork} ->${Date.now()}-${Math.random()
+      .toString(36)
+      .substr(2, 9)}`;
 
     if (this.pendingTransactions.has(tradeKey)) {
       logger.warn(`Arbitrage trade already in progress: ${tradeKey}`);
