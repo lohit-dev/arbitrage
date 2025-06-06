@@ -31,3 +31,7 @@ export const ERC20_ABI = [
   "event Transfer(address indexed from, address indexed to, uint amount)",
   "event Approval(address indexed owner, address indexed spender, uint value)",
 ];
+
+export const SWAP_ROUTER_ABI = [
+  "function exactInputSingle((address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 deadline, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96)) external payable returns (uint256 amountOut)",
+];
