@@ -217,120 +217,123 @@ export class ArbitrageService {
     const ethereumPool = this.poolStates.get(ethereumPoolKey);
     const arbitrumPool = this.poolStates.get(arbitrumPoolKey);
 
-    logger.info(`📊 Pool State Check:`);
-    logger.info(
-      `  - Ethereum pool (${ethereumPoolKey}): ${
-        ethereumPool ? "✅ Available" : "❌ Missing"
-      }`
-    );
-    logger.info(
-      `  - Arbitrum pool (${arbitrumPoolKey}): ${
-        arbitrumPool ? "✅ Available" : "❌ Missing"
-      }`
-    );
-
-    if (ethereumPool) {
-      const ethPrice = this.calculatePriceFromSqrtPrice(
-        ethereumPool.sqrtPriceX96
-      );
-      logger.info(`  - Ethereum price: ${ethPrice.toFixed(8)}`);
-      logger.info(
-        `  - Ethereum liquidity: ${ethers.utils.formatEther(
-          ethereumPool.liquidity
-        )}`
-      );
-    }
-
-    if (arbitrumPool) {
-      const arbPrice = this.calculatePriceFromSqrtPrice(
-        arbitrumPool.sqrtPriceX96
-      );
-      logger.info(`  - Arbitrum price: ${arbPrice.toFixed(8)}`);
-      logger.info(
-        `  - Arbitrum liquidity: ${ethers.utils.formatEther(
-          arbitrumPool.liquidity
-        )}`
-      );
-    }
-
     if (!ethereumPool || !arbitrumPool) {
       logger.warn("❌ Cannot check arbitrage - missing pool state(s)");
-      logger.info(
-        "💡 Hint: Pool states are initialized on startup and updated via swap events"
+      return null;
+    }
+
+    // Get actual tradeable amounts using quotes
+    const tradeAmount = config.trading.defaultTradeAmount;
+
+    try {
+      // Get quotes for both directions
+      const [ethBuyQuote, ethSellQuote] = await Promise.all([
+        this.getQuote("ethereum", "WETH", "SEED", tradeAmount),
+        this.getQuote("ethereum", "SEED", "WETH", tradeAmount),
+      ]);
+
+      const [arbBuyQuote, arbSellQuote] = await Promise.all([
+        this.getQuote("arbitrum", "WETH", "SEED", tradeAmount),
+        this.getQuote("arbitrum", "SEED", "WETH", tradeAmount),
+      ]);
+
+      // Calculate actual receivable amounts
+      const ethBuyAmount = parseFloat(
+        ethers.utils.formatUnits(ethBuyQuote, 18)
       );
+      const ethSellAmount = parseFloat(
+        ethers.utils.formatUnits(ethSellQuote, 18)
+      );
+      const arbBuyAmount = parseFloat(
+        ethers.utils.formatUnits(arbBuyQuote, 18)
+      );
+      const arbSellAmount = parseFloat(
+        ethers.utils.formatUnits(arbSellQuote, 18)
+      );
+
+      logger.info("📊 Trade Amounts (1 WETH):");
+      logger.info(`ETH Buy: ${ethBuyAmount.toFixed(4)} SEED`);
+      logger.info(`ETH Sell: ${ethSellAmount.toFixed(4)} WETH`);
+      logger.info(`ARB Buy: ${arbBuyAmount.toFixed(4)} SEED`);
+      logger.info(`ARB Sell: ${arbSellAmount.toFixed(4)} WETH`);
+
+      // Calculate actual profits in both directions
+      const ethToArbProfit = this.calculateCrossChainProfit(
+        ethBuyAmount, // SEED received from buying on ETH
+        arbSellAmount, // WETH received from selling on ARB
+        parseFloat(ethers.utils.formatUnits(tradeAmount, 18)) // Original WETH amount
+      );
+
+      const arbToEthProfit = this.calculateCrossChainProfit(
+        arbBuyAmount, // SEED received from buying on ARB
+        ethSellAmount, // WETH received from selling on ETH
+        parseFloat(ethers.utils.formatUnits(tradeAmount, 18)) // Original WETH amount
+      );
+
+      logger.info("💰 Profit Calculations:");
+      logger.info(
+        `ETH → ARB: ${ethToArbProfit.toFixed(4)} WETH (${(
+          ethToArbProfit * 100
+        ).toFixed(2)}%)`
+      );
+      logger.info(
+        `ARB → ETH: ${arbToEthProfit.toFixed(4)} WETH (${(
+          arbToEthProfit * 100
+        ).toFixed(2)}%)`
+      );
+
+      // Only proceed if profit exceeds threshold
+      const minProfitThreshold =
+        parseFloat(config.trading.minProfitThreshold) / 100;
+      let opportunity: ArbitrageOpportunity | null = null;
+
+      if (
+        ethToArbProfit > minProfitThreshold &&
+        ethToArbProfit > arbToEthProfit
+      ) {
+        opportunity = {
+          buyNetwork: "ethereum",
+          sellNetwork: "arbitrum",
+          buyPrice: ethBuyQuote,
+          sellPrice: arbSellQuote,
+          priceDifference: (
+            parseFloat(arbSellQuote) - parseFloat(ethBuyQuote)
+          ).toString(),
+          profitEstimate: ethToArbProfit.toString(),
+          gasEstimate: this.estimateGasCosts("ethereum", "arbitrum"),
+          timestamp: Date.now(),
+        };
+      } else if (
+        arbToEthProfit > minProfitThreshold &&
+        arbToEthProfit > ethToArbProfit
+      ) {
+        opportunity = {
+          buyNetwork: "arbitrum",
+          sellNetwork: "ethereum",
+          buyPrice: arbBuyQuote,
+          sellPrice: ethSellQuote,
+          priceDifference: (
+            parseFloat(ethSellQuote) - parseFloat(arbBuyQuote)
+          ).toString(),
+          profitEstimate: arbToEthProfit.toString(),
+          gasEstimate: this.estimateGasCosts("arbitrum", "ethereum"),
+          timestamp: Date.now(),
+        };
+      }
+      return opportunity;
+    } catch (error) {
+      logger.error("Failed to calculate arbitrage opportunity:", error);
       return null;
     }
+  }
 
-    const ethPrice = this.calculatePriceFromSqrtPrice(
-      ethereumPool.sqrtPriceX96
-    );
-    const arbPrice = this.calculatePriceFromSqrtPrice(
-      arbitrumPool.sqrtPriceX96
-    );
-
-    logger.info(
-      `💰 Current prices - ETH: ${ethPrice.toFixed(8)}, ARB: ${arbPrice.toFixed(
-        8
-      )}`
-    );
-
-    // Calculate profits for both directions
-    const ethToArbProfit = arbPrice - ethPrice; // Buy on ETH, sell on ARB
-    const arbToEthProfit = ethPrice - arbPrice; // Buy on ARB, sell on ETH
-
-    logger.info(`📈 Profit calculations:`);
-    logger.info(`  - ETH -> ARB profit: ${ethToArbProfit.toFixed(8)}`);
-    logger.info(`  - ARB -> ETH profit: ${arbToEthProfit.toFixed(8)}`);
-
-    let buyNetwork, sellNetwork, buyPrice, sellPrice, profitAmount;
-
-    // Only choose direction if profit meets minimum threshold
-    const minProfitThreshold = parseFloat(config.trading.minProfitThreshold);
-    logger.info(`🎯 Minimum profit threshold: ${minProfitThreshold}`);
-
-    if (
-      ethToArbProfit > arbToEthProfit &&
-      ethToArbProfit > minProfitThreshold
-    ) {
-      buyNetwork = "ethereum";
-      sellNetwork = "arbitrum";
-      buyPrice = ethPrice;
-      sellPrice = arbPrice;
-      profitAmount = ethToArbProfit;
-      logger.info(`✅ Profitable opportunity: Buy ETH, Sell ARB`);
-    } else if (arbToEthProfit > minProfitThreshold) {
-      buyNetwork = "arbitrum";
-      sellNetwork = "ethereum";
-      buyPrice = arbPrice;
-      sellPrice = ethPrice;
-      profitAmount = arbToEthProfit;
-      logger.info(`✅ Profitable opportunity: Buy ARB, Sell ETH`);
-    } else {
-      logger.info("❌ No profitable arbitrage opportunity found");
-      return null;
-    }
-
-    const profitPercentage = profitAmount / buyPrice;
-    const tradeAmount = parseFloat(
-      ethers.utils.formatEther(config.trading.defaultTradeAmount)
-    );
-    const profitEstimate = (profitAmount * tradeAmount).toString();
-
-    logger.info(
-      `💯 Profit percentage: ${(profitPercentage * 100).toFixed(2)}%`
-    );
-    logger.info(`💰 Estimated profit: ${profitEstimate}`);
-
-    return {
-      buyNetwork,
-      sellNetwork,
-      buyPrice: buyPrice.toString(),
-      sellPrice: sellPrice.toString(),
-      priceDifference: profitAmount.toString(),
-      profitEstimate,
-      gasEstimate: this.estimateGasCosts(buyNetwork, sellNetwork),
-      timestamp: Date.now(),
-    };
+  private calculateCrossChainProfit(
+    buyAmount: number, // Amount of SEED received from buy
+    sellRate: number, // WETH per SEED on sell side
+    inputAmount: number // Original WETH amount
+  ): number {
+    const receivedWeth = buyAmount * sellRate;
+    return (receivedWeth - inputAmount) / inputAmount;
   }
 
   // This is not a scam, this is is the actual price calculation
@@ -566,7 +569,10 @@ export class ArbitrageService {
 
     if (cached && Date.now() - cached.timestamp < this.CACHE_DURATION) {
       logger.debug(`Using cached quote for ${cacheKey}`);
-      return cached.price.toString();
+      // Convert cached price to proper string format without scientific notation
+      return ethers.BigNumber.from(
+        cached.price.toLocaleString("fullwide", { useGrouping: false })
+      ).toString();
     }
 
     const networkRuntime = this.networks.get(network);
@@ -586,17 +592,21 @@ export class ArbitrageService {
 
       const poolInfo: PoolInfo = await this.getPoolInfo(network);
 
-      const quote: string =
+      // Ensure amountIn is properly formatted as a BigNumber
+      const formattedAmountIn = ethers.BigNumber.from(amountIn);
+
+      const quote =
         await networkRuntime.quoter.callStatic.quoteExactInputSingle(
           networkRuntime.tokens[tokenIn].address,
           networkRuntime.tokens[tokenOut].address,
           poolInfo.fee,
-          amountIn,
+          formattedAmountIn.toString(),
           0 // sqrtPriceLimitX96: 0 to accept any price impact
         );
 
+      // Store the quote in cache as a BigNumber string
       this.priceCache.set(cacheKey, {
-        price: parseFloat(quote),
+        price: parseFloat(quote.toString()),
         timestamp: Date.now(),
       });
 
